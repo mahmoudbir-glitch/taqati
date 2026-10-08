@@ -36,6 +36,8 @@ jobs:
           package-manager-cache: false
       - run: pnpm install --no-frozen-lockfile
       - run: pnpm db:validate
+      - run: pnpm db:migrate:diff
+      - run: test -s packages/database/prisma/migrations/0_init/migration.sql
       - run: pnpm --filter @taqati/database exec prisma db push --config prisma.config.ts --accept-data-loss
       - run: pnpm typecheck
       - run: pnpm build
