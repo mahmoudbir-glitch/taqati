@@ -1,17 +1,13 @@
 import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import { prisma } from "@taqati/database";
 import { TelemetryService } from "../telemetry.service";
-import { sha1, SmartessClient, SmartessConfig } from "./smartess.client";
-import { mapLastData } from "./smartess.mapper";
+import { deviceFromSn, sha1, SmartessClient, SmartessConfig } from "./smartess.client";
+import { hasHeadlineData, mapLastData } from "./smartess.mapper";
 
-const REQUIRED = [
-  "SMARTESS_USERNAME",
-  "SMARTESS_COMPANY_KEY",
-  "SMARTESS_DEVICE_PN",
-  "SMARTESS_DEVICE_SN",
-  "SMARTESS_DEVICE_DEVCODE",
-  "SMARTESS_DEVICE_DEVADDR",
-] as const;
+const REQUIRED = ["SMARTESS_USERNAME", "SMARTESS_DEVICE_PN", "SMARTESS_DEVICE_SN"] as const;
+
+// Public client key used by the SmartESS web app (same default as the Solar project).
+const DEFAULT_COMPANY_KEY = "bnrl_frRFjEz8Mkn";
 
 interface PollerSettings {
   client: SmartessConfig;
@@ -36,20 +32,31 @@ function loadSettings(logger: Logger): PollerSettings | null {
     return null;
   }
 
+  // The SN is PN + devcode (4 hex) + devaddr (2 hex); explicit values override it.
+  const derived = deviceFromSn(env.SMARTESS_DEVICE_PN as string, env.SMARTESS_DEVICE_SN as string);
+  const devcode = env.SMARTESS_DEVICE_DEVCODE ? Number(env.SMARTESS_DEVICE_DEVCODE) : derived?.devcode;
+  const devaddr = env.SMARTESS_DEVICE_DEVADDR ? Number(env.SMARTESS_DEVICE_DEVADDR) : derived?.devaddr;
+  if (devcode === undefined || devaddr === undefined || !Number.isFinite(devcode) || !Number.isFinite(devaddr)) {
+    logger.error(
+      "SmartESS polling not started: SMARTESS_DEVICE_SN must be PN + 6 hex digits, or set SMARTESS_DEVICE_DEVCODE and SMARTESS_DEVICE_DEVADDR",
+    );
+    return null;
+  }
+
   const intervalSeconds = Number(env.SMARTESS_POLL_INTERVAL_SECONDS ?? 300);
   return {
     client: {
       baseUrl: env.SMARTESS_API_BASE || "https://api.dessmonitor.com/public/",
-      authAction: env.SMARTESS_AUTH_ACTION || "auth",
+      authAction: env.SMARTESS_AUTH_ACTION || undefined,
       username: env.SMARTESS_USERNAME as string,
       passwordSha1,
-      companyKey: env.SMARTESS_COMPANY_KEY as string,
+      companyKey: env.SMARTESS_COMPANY_KEY || DEFAULT_COMPANY_KEY,
       source: env.SMARTESS_SOURCE || "1",
       device: {
         pn: env.SMARTESS_DEVICE_PN as string,
         sn: env.SMARTESS_DEVICE_SN as string,
-        devcode: env.SMARTESS_DEVICE_DEVCODE as string,
-        devaddr: env.SMARTESS_DEVICE_DEVADDR as string,
+        devcode,
+        devaddr,
       },
     },
     siteId: env.SITE_ID || "development-site",
@@ -122,7 +129,7 @@ export class SmartessPoller implements OnModuleInit, OnModuleDestroy {
 
   private async pollOnce(client: SmartessClient, settings: PollerSettings) {
     try {
-      const data = await client.fetchLastData();
+      const data = await client.fetchLastData(hasHeadlineData);
       const message = mapLastData(data, { timezoneOffset: settings.timezoneOffset });
       if (!message) {
         this.logger.warn("SmartESS returned no recognizable parameters");

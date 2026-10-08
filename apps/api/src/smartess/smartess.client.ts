@@ -3,8 +3,8 @@ import { createHash } from "crypto";
 /**
  * Minimal client for the SmartESS / DessMonitor cloud API (api.dessmonitor.com).
  *
- * Signing follows the public API docs:
- *   auth:  sign = sha1(salt + sha1(password) + actionString)
+ * Signing (same scheme the SmartESS web app uses):
+ *   login: sign = sha1(salt + sha1(password) + actionString)
  *   calls: sign = sha1(salt + secret + token + actionString)
  * where actionString is "&action=...&k=v..." exactly as sent in the URL.
  *
@@ -14,13 +14,14 @@ import { createHash } from "crypto";
 export interface SmartessDevice {
   pn: string;
   sn: string;
-  devcode: string;
-  devaddr: string;
+  devcode: number;
+  devaddr: number;
 }
 
 export interface SmartessConfig {
   baseUrl: string;
-  authAction: string;
+  /** Login action. When omitted, "authSource" is tried first and then "auth". */
+  authAction?: string;
   username: string;
   passwordSha1: string;
   companyKey: string;
@@ -58,6 +59,13 @@ const APP_PARAMS: Array<[string, string]> = [
   ["_app_version_", "1.0.0"],
 ];
 
+/**
+ * Energy-storage inverters answer through querySPDeviceLastData, other device
+ * types through queryDeviceLastData, and the energy-flow view carries the
+ * headline PV / load / battery figures the app draws on its house picture.
+ */
+const READ_ACTIONS = ["querySPDeviceLastData", "queryDeviceLastData", "webQueryDeviceEnergyFlowEs"];
+
 export const sha1 = (value: string) => createHash("sha1").update(value).digest("hex");
 
 export function buildAction(action: string, params: Array<[string, string]>) {
@@ -65,6 +73,24 @@ export function buildAction(action: string, params: Array<[string, string]>) {
     `&action=${encodeURIComponent(action)}` +
     params.map(([key, value]) => `&${key}=${encodeURIComponent(value)}`).join("")
   );
+}
+
+/**
+ * A SmartESS device SN is the datalogger PN followed by the device code (4 hex
+ * digits) and the device address (2 hex digits). Returns null if it does not fit.
+ */
+export function deviceFromSn(pn: string, sn: string): SmartessDevice | null {
+  const cleanPn = pn.trim();
+  const cleanSn = sn.trim();
+  if (!cleanPn || !cleanSn.startsWith(cleanPn)) return null;
+  const rest = cleanSn.slice(cleanPn.length);
+  if (!/^[0-9a-fA-F]{6}$/.test(rest)) return null;
+  return {
+    pn: cleanPn,
+    sn: cleanSn,
+    devcode: parseInt(rest.slice(0, 4), 16),
+    devaddr: parseInt(rest.slice(4), 16),
+  };
 }
 
 export class SmartessApiError extends Error {
@@ -83,21 +109,70 @@ export class SmartessClient {
 
   constructor(private readonly config: SmartessConfig) {}
 
-  async fetchLastData(): Promise<SmartessLastData> {
+  /**
+   * Reads every parameter the cloud exposes for the device. Actions are tried in
+   * order and their parameters merged until `isComplete` says there is enough.
+   */
+  async fetchLastData(isComplete?: (pars: SmartessPar[]) => boolean): Promise<SmartessLastData> {
+    try {
+      return await this.readAll(isComplete);
+    } catch (error) {
+      // A stale session is the usual reason every action fails: log in again once.
+      if (error instanceof SmartessApiError && this.session) {
+        this.session = undefined;
+        return this.readAll(isComplete);
+      }
+      throw error;
+    }
+  }
+
+  private async readAll(isComplete?: (pars: SmartessPar[]) => boolean): Promise<SmartessLastData> {
     const { device, source } = this.config;
-    const dat = await this.call("querySPDeviceLastData", [
+    const params: Array<[string, string]> = [
       ["source", source],
-      ["devcode", device.devcode],
+      ["devcode", String(device.devcode)],
       ["pn", device.pn],
-      ["devaddr", device.devaddr],
+      ["devaddr", String(device.devaddr)],
       ["sn", device.sn],
       ["i18n", "en_US"],
-    ]);
-    return parseLastData(dat);
+    ];
+
+    const pars: SmartessPar[] = [];
+    let gts: string | undefined;
+    let answered = false;
+    let lastError: unknown;
+
+    for (const action of READ_ACTIONS) {
+      try {
+        const parsed = parseLastData(await this.call(action, params));
+        answered = true;
+        pars.push(...parsed.pars);
+        gts ??= parsed.gts;
+        if (isComplete?.(pars)) break;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    if (!answered) throw lastError ?? new Error("SmartESS returned no data");
+    return { gts, pars };
   }
 
   private async authenticate(): Promise<Session> {
-    const { baseUrl, authAction, username, passwordSha1, companyKey, source } = this.config;
+    const actions = this.config.authAction ? [this.config.authAction] : ["authSource", "auth"];
+    let lastError: unknown;
+    for (const action of actions) {
+      try {
+        return await this.login(action);
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError;
+  }
+
+  private async login(authAction: string): Promise<Session> {
+    const { baseUrl, username, passwordSha1, companyKey, source } = this.config;
     const salt = String(Date.now());
     const action = buildAction(authAction, [
       ["usr", username],
@@ -112,9 +187,10 @@ export class SmartessClient {
     if (!dat || typeof dat.token !== "string" || typeof dat.secret !== "string") {
       throw new SmartessApiError(authAction, body.err, "missing token/secret in response");
     }
-    const expireSeconds = typeof dat.expire === "number" ? dat.expire : Number(dat.expire);
-    const ttlMs = (Number.isFinite(expireSeconds) && expireSeconds > 0 ? expireSeconds : 3600) * 1000;
-    return { token: dat.token, secret: dat.secret, expiresAt: Date.now() + ttlMs };
+    // Lifetime is reported in seconds (7 days when absent); renew a little early.
+    const expireSeconds = Number(dat.expire);
+    const lifetime = Number.isFinite(expireSeconds) && expireSeconds > 0 ? expireSeconds : 7 * 24 * 3600;
+    return { token: dat.token, secret: dat.secret, expiresAt: Date.now() + Math.max(60, lifetime - 300) * 1000 };
   }
 
   private async ensureSession() {
@@ -124,59 +200,63 @@ export class SmartessClient {
     return this.session;
   }
 
-  private async call(action: string, params: Array<[string, string]>, retry = true): Promise<unknown> {
+  private async call(action: string, params: Array<[string, string]>): Promise<unknown> {
     const session = await this.ensureSession();
     const salt = String(Date.now());
     const actionString = buildAction(action, [...params, ...APP_PARAMS]);
     const sign = sha1(salt + session.secret + session.token + actionString);
     const url = `${this.config.baseUrl}?sign=${sign}&salt=${salt}&token=${session.token}${actionString}`;
-
-    try {
-      return (await this.request(action, url)).dat;
-    } catch (error) {
-      // An expired/invalid session is the common cause of a failed call: log in again once.
-      if (retry && error instanceof SmartessApiError) {
-        this.session = undefined;
-        return this.call(action, params, false);
-      }
-      throw error;
-    }
+    return (await this.request(action, url)).dat;
   }
 
   private async request(action: string, url: string): Promise<ApiEnvelope> {
-    const response = await fetch(url, { signal: AbortSignal.timeout(15_000) });
-    if (!response.ok) {
-      throw new SmartessApiError(action, undefined, `HTTP ${response.status}`);
-    }
-    const body = (await response.json()) as ApiEnvelope;
-    if (body.err !== 0) {
-      throw new SmartessApiError(action, body.err, body.desc);
-    }
-    return body;
-  }
-}
-
-export function parseLastData(dat: unknown): SmartessLastData {
-  if (!dat || typeof dat !== "object") return { pars: [] };
-  const record = dat as { gts?: unknown; pars?: unknown };
-  const pars: SmartessPar[] = [];
-
-  if (record.pars && typeof record.pars === "object") {
-    for (const group of Object.values(record.pars as Record<string, unknown>)) {
-      if (!Array.isArray(group)) continue;
-      for (const item of group) {
-        if (!item || typeof item !== "object") continue;
-        const entry = item as Record<string, unknown>;
-        if (typeof entry.par !== "string" || entry.val === undefined || entry.val === null) continue;
-        pars.push({
-          id: typeof entry.id === "string" ? entry.id : "",
-          par: entry.par,
-          val: String(entry.val),
-          unit: typeof entry.unit === "string" ? entry.unit : undefined,
-        });
+    // SmartESS is slow and occasionally drops a request: retry once on a
+    // network/timeout error, never on a real API answer.
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        const response = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+        if (!response.ok) throw new SmartessApiError(action, undefined, `HTTP ${response.status}`);
+        const body = (await response.json()) as ApiEnvelope;
+        if (body.err !== 0) throw new SmartessApiError(action, body.err, body.desc);
+        return body;
+      } catch (error) {
+        if (error instanceof SmartessApiError || attempt >= 1) throw error;
       }
     }
   }
+}
 
-  return { gts: typeof record.gts === "string" ? record.gts : undefined, pars };
+/**
+ * Collects every {par, val, unit} entry found anywhere in the payload. The
+ * nesting differs between actions and device families, so walk it generically.
+ */
+export function parseLastData(dat: unknown): SmartessLastData {
+  const pars: SmartessPar[] = [];
+  const seen = new Set<unknown>();
+
+  const visit = (node: unknown, depth: number) => {
+    if (!node || typeof node !== "object" || depth > 6 || seen.has(node)) return;
+    seen.add(node);
+    if (Array.isArray(node)) {
+      for (const child of node) visit(child, depth + 1);
+      return;
+    }
+    const item = node as Record<string, unknown>;
+    const label = item.par ?? item.name;
+    const value = item.val ?? item.value;
+    if (typeof label === "string" && label.trim() && (typeof value === "string" || typeof value === "number")) {
+      pars.push({
+        id: typeof item.id === "string" ? item.id : "",
+        par: label.trim(),
+        val: String(value),
+        unit: typeof item.unit === "string" ? item.unit : undefined,
+      });
+      return;
+    }
+    for (const child of Object.values(item)) visit(child, depth + 1);
+  };
+  visit(dat, 0);
+
+  const gts = dat && typeof dat === "object" ? (dat as { gts?: unknown }).gts : undefined;
+  return { gts: typeof gts === "string" ? gts : undefined, pars };
 }

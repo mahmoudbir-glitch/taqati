@@ -2,52 +2,163 @@ import type { TaqatiTelemetryMessage } from "@taqati/shared";
 import type { SmartessLastData, SmartessPar } from "./smartess.client";
 
 /**
- * Maps a SmartESS "last data" payload to Taqati's normalized telemetry.
+ * Maps SmartESS parameters to Taqati's normalized telemetry.
  *
- * Parameters are matched by their English label (the same labels the SmartESS app
- * shows, e.g. "Battery percentage", "Grid Power"). Labels that are not mapped are
- * kept under `meta.extra` so nothing is lost and the mapping can be tuned later.
+ * Labels differ between firmware versions and device codes, so parameters are
+ * matched on their human-readable (English) label with patterns rather than on
+ * fixed ids. Anything not mapped is kept under `meta.extra` so nothing is lost.
+ * The matching rules follow the ones proven in the Solar project.
  */
 
-const LABELS = {
-  solarPower: ["pv power"],
-  pvVoltage: ["pv voltage"],
-  pvCurrent: ["pv current"],
-  loadPower: ["output active power"],
-  loadApparent: ["output apparent power"],
-  gridPower: ["grid power"],
-  gridVoltage: ["grid voltage"],
-  gridFrequency: ["grid frequency"],
-  batterySoc: ["battery percentage", "battery capacity"],
-  batteryVoltage: ["battery voltage"],
-  batteryCurrent: ["battery current"],
-  batteryPower: ["battery power"],
-} as const;
+const text = (label: string) => label.replace(/_+/g, " ");
 
-const EXTRA_LABELS: Record<string, string> = {
-  "pv voltage": "pvVoltageV",
-  "pv current": "pvCurrentA",
-  "output voltage": "outputVoltageV",
-  "output current": "outputCurrentA",
-  "output frequency": "outputFrequencyHz",
-  "output apparent power": "outputApparentPowerVA",
-  "pv charge power": "pvChargePowerW",
-  "ac charging current": "acChargingCurrentA",
-  "pv charging current": "pvChargingCurrentA",
-};
-
-const normalizeLabel = (label: string) => label.trim().toLowerCase().replace(/\s+/g, " ");
-
-function toNumber(par: SmartessPar | undefined): number | undefined {
-  if (!par) return undefined;
-  const value = parseFloat(par.val);
-  return Number.isFinite(value) ? value : undefined;
+function toNumber(value: string): number | undefined {
+  const cleaned = String(value).replace(/[^\d.+-]/g, "");
+  // "", "N/A" or "--" mean "no value", not 0 (a blank grid voltage read as 0 V
+  // would look like a grid outage).
+  if (!/\d/.test(cleaned)) return undefined;
+  const parsed = Number(cleaned);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-function toWatts(par: SmartessPar | undefined): number | undefined {
-  const value = toNumber(par);
-  if (value === undefined) return undefined;
-  return par?.unit?.trim().toLowerCase() === "kw" ? value * 1000 : value;
+const isKilowatt = (unit: string | undefined) => /^\s*kw\b/i.test(unit ?? "");
+
+/** First parameter whose label matches `pattern` and whose unit fits `expectedUnit`. */
+function pick(pars: SmartessPar[], pattern: RegExp, expectedUnit?: string): number | undefined {
+  for (const par of pars) {
+    if (!pattern.test(text(par.par))) continue;
+    if (expectedUnit && par.unit && !par.unit.toLowerCase().includes(expectedUnit.toLowerCase())) continue;
+    const numeric = toNumber(par.val);
+    if (numeric === undefined) continue;
+    // "kW".includes("W") is true, so scale kilowatts explicitly.
+    return expectedUnit === "W" && isKilowatt(par.unit) ? numeric * 1000 : numeric;
+  }
+  return undefined;
+}
+
+const NOT_PV = /^(?!.*\b(pv|solar)\b)/i;
+const CHARGE_CURRENT = /\b(battery|batt)\b.*\bchargn?(e|ing)?\b.*\bcurrent\b/i;
+const DISCHARGE_CURRENT = /\b(battery|batt)\b.*\bdischarg\w*\b.*\bcurrent\b/i;
+const GENERIC_CURRENT = /\b(battery|batt)\b.*\bcurrent\b/i;
+
+export interface Reading {
+  solarPowerW?: number;
+  loadPowerW?: number;
+  gridPowerW?: number;
+  gridVoltageV?: number;
+  gridFrequencyHz?: number;
+  inverterTemperatureC?: number;
+  soc?: number;
+  batteryVoltageV?: number;
+  /** Positive = charging, negative = discharging, when the cloud reports it that way. */
+  batteryCurrentA?: number;
+  batteryCurrentSigned: boolean;
+  batteryPowerW?: number;
+  extra: Record<string, number>;
+}
+
+export function extractReading(pars: SmartessPar[]): Reading {
+  // Panel power is reported under several labels ("PV Power", "PV Charge Power").
+  // In mains mode the inverter can report "PV Power" as 0 while all panel output
+  // goes into "PV Charge Power", so the panels produce at least the largest one.
+  let pvMax: number | undefined;
+  for (const par of pars) {
+    const label = text(par.par);
+    if (!/\b(pv|solar)\b/i.test(label) || !/\bpower\b/i.test(label)) continue;
+    if (par.unit && !/w/i.test(par.unit)) continue;
+    const numeric = toNumber(par.val);
+    if (numeric === undefined || numeric < 0) continue;
+    pvMax = Math.max(pvMax ?? 0, isKilowatt(par.unit) ? numeric * 1000 : numeric);
+  }
+  const solarPick = pick(pars, /\b(pv|solar)\b.*\b(power|charging power)\b/i, "W");
+  const solarPowerW = pvMax === undefined ? solarPick : Math.max(solarPick ?? 0, pvMax);
+
+  const loadPowerW =
+    pick(pars, /\boutput\b.*\bactive\b.*\bpower\b/i, "W") ??
+    pick(pars, new RegExp(`${NOT_PV.source}.*\\bload\\b.*\\bpower\\b`, "i"), "W") ??
+    pick(pars, new RegExp(`${NOT_PV.source}.*\\b(load|output)\\b.*\\b(power|apparent|active)\\b`, "i"), "W");
+
+  // Battery current is often two one-way parameters; the dashboard convention is
+  // one signed number (positive charging). A one-way parameter at 0 just means
+  // that direction is inactive, so whichever is non-zero wins.
+  let charge: number | undefined;
+  let discharge: number | undefined;
+  let generic: number | undefined;
+  for (const par of pars) {
+    const numeric = toNumber(par.val);
+    if (numeric === undefined) continue;
+    const label = text(par.par);
+    if (DISCHARGE_CURRENT.test(label)) discharge ??= numeric;
+    else if (CHARGE_CURRENT.test(label)) charge ??= numeric;
+    else if (GENERIC_CURRENT.test(label)) generic ??= numeric;
+  }
+  let batteryCurrentA: number | undefined;
+  let batteryCurrentSigned = false;
+  if (charge !== undefined && charge !== 0) {
+    batteryCurrentA = Math.abs(charge);
+    batteryCurrentSigned = true;
+  } else if (discharge !== undefined && discharge !== 0) {
+    batteryCurrentA = -Math.abs(discharge);
+    batteryCurrentSigned = true;
+  } else if (generic !== undefined) {
+    batteryCurrentA = generic;
+  } else if (charge !== undefined || discharge !== undefined) {
+    batteryCurrentA = 0;
+    batteryCurrentSigned = true;
+  }
+
+  const batteryVoltageV = pick(pars, /\b(battery|batt)\b.*\bvoltage\b/i, "V");
+  let batteryPowerW = pick(pars, /^(?!.*\b(charg|discharg)\w*\b).*\b(battery|batt)\b.*\bpower\b/i, "W");
+  if (batteryPowerW === undefined && batteryVoltageV !== undefined && batteryCurrentA !== undefined) {
+    batteryPowerW = Math.round(batteryVoltageV * batteryCurrentA);
+  }
+
+  const temperatures: number[] = [];
+  for (const par of pars) {
+    const label = text(par.par);
+    if (/\b(dc|inv|inverter)\b.*\bmodule\b.*\bte?r?m?p/i.test(label) || /\binverter\b.*\btemp/i.test(label)) {
+      const numeric = toNumber(par.val);
+      if (numeric !== undefined) temperatures.push(numeric);
+    }
+  }
+
+  const extra: Record<string, number> = {};
+  const addExtra = (key: string, value: number | undefined) => {
+    if (value !== undefined) extra[key] = value;
+  };
+  addExtra("pvVoltageV", pick(pars, /\b(pv|solar)\b.*\bvoltage\b/i, "V"));
+  addExtra("pvCurrentA", pick(pars, /\b(pv|solar)\b.*\bcurrent\b/i, "A"));
+  addExtra("outputVoltageV", pick(pars, /\b(ac\s*)?output\b.*\bvoltage\b/i, "V"));
+  addExtra("outputCurrentA", pick(pars, /\b(ac\s*)?output\b.*\bcurrent\b/i, "A"));
+  addExtra("outputFrequencyHz", pick(pars, /\boutput\b.*\bfreq/i, "Hz"));
+  addExtra("outputApparentPowerVA", pick(pars, /\boutput\b.*\bapparent\b.*\bpower\b/i));
+  addExtra("loadPercent", pick(pars, /\bload\b.*\b(percent|%)/i));
+  addExtra("pvChargePowerW", pick(pars, /\bpv\b.*\bcharg\w*\b.*\bpower\b/i, "W"));
+  addExtra("acChargingCurrentA", pick(pars, /\bac\b.*\bcharg\w*\b.*\bcurrent\b/i, "A"));
+  addExtra("pvChargingCurrentA", pick(pars, /\bpv\b.*\bcharg\w*\b.*\bcurrent\b/i, "A"));
+
+  return {
+    solarPowerW,
+    loadPowerW,
+    gridPowerW: pick(pars, /\b(grid|utility|mains)\b.*\bpower\b/i, "W"),
+    gridVoltageV: pick(pars, /\b(grid|utility|ac\s*input|mains)\b.*\bvoltage\b/i, "V"),
+    gridFrequencyHz: pick(pars, /\b(grid|utility|mains|ac\s*input)\b.*\bfreq/i, "Hz"),
+    inverterTemperatureC: temperatures.length ? Math.max(...temperatures) : undefined,
+    soc: pick(pars, /\b(battery|batt)\b.*\b(capacity|soc|percent|level)\b/i, "%"),
+    batteryVoltageV,
+    batteryCurrentA,
+    batteryCurrentSigned,
+    batteryPowerW,
+    extra,
+  };
+}
+
+/** True when the headline figures (PV, load, battery, grid) are all present. */
+export function hasHeadlineData(pars: SmartessPar[]): boolean {
+  const reading = extractReading(pars);
+  return [reading.solarPowerW, reading.loadPowerW, reading.soc, reading.batteryPowerW, reading.gridPowerW].every(
+    (value) => value !== undefined,
+  );
 }
 
 export interface MapOptions {
@@ -66,61 +177,33 @@ export function parseGts(gts: string | undefined, timezoneOffset: string, fallba
 }
 
 export function mapLastData(data: SmartessLastData, options: MapOptions): TaqatiTelemetryMessage | null {
-  const byLabel = new Map<string, SmartessPar>();
-  for (const par of data.pars) {
-    const key = normalizeLabel(par.par);
-    if (!byLabel.has(key)) byLabel.set(key, par);
-  }
-  const find = (labels: readonly string[]) => {
-    for (const label of labels) {
-      const found = byLabel.get(label);
-      if (found) return found;
-    }
-    return undefined;
-  };
-
-  const pvVoltage = toNumber(find(LABELS.pvVoltage));
-  const pvCurrent = toNumber(find(LABELS.pvCurrent));
-  const solarPowerW =
-    toWatts(find(LABELS.solarPower)) ??
-    (pvVoltage !== undefined && pvCurrent !== undefined ? Math.round(pvVoltage * pvCurrent) : undefined);
-  const loadPowerW = toWatts(find(LABELS.loadPower)) ?? toWatts(find(LABELS.loadApparent));
-  const gridPowerW = toWatts(find(LABELS.gridPower));
-
-  const soc = toNumber(find(LABELS.batterySoc));
-  const batteryVoltage = toNumber(find(LABELS.batteryVoltage));
-  const batteryCurrent = toNumber(find(LABELS.batteryCurrent));
-  const batteryPowerRaw =
-    toWatts(find(LABELS.batteryPower)) ??
-    (batteryVoltage !== undefined && batteryCurrent !== undefined ? batteryVoltage * batteryCurrent : undefined);
+  const reading = extractReading(data.pars);
+  const { solarPowerW, loadPowerW, gridPowerW, soc } = reading;
 
   // Nothing recognizable: let the caller treat this as "no data".
   if (solarPowerW === undefined && loadPowerW === undefined && gridPowerW === undefined && soc === undefined) {
     return null;
   }
 
-  // Direction: a negative battery power means discharging; otherwise use the
-  // energy balance (grid + solar - load), assuming grid import is positive.
+  // Direction: explicit one-way parameters first, then a negative power, then the
+  // energy balance (grid + solar - load, grid import positive).
   let direction: "charging" | "discharging" | "idle" | "unknown" = "unknown";
-  if (batteryPowerRaw !== undefined) {
-    if (batteryPowerRaw < 0) {
-      direction = "discharging";
-    } else if (gridPowerW !== undefined && loadPowerW !== undefined) {
-      const surplus = gridPowerW + (solarPowerW ?? 0) - loadPowerW;
-      direction = surplus > 20 ? "charging" : surplus < -20 ? "discharging" : "idle";
-    } else {
-      direction = batteryPowerRaw > 20 ? "charging" : "idle";
-    }
-  }
-
-  const extra: Record<string, number> = {};
-  for (const [label, key] of Object.entries(EXTRA_LABELS)) {
-    const value = label.endsWith("power") ? toWatts(byLabel.get(label)) : toNumber(byLabel.get(label));
-    if (value !== undefined) extra[key] = value;
+  const current = reading.batteryCurrentA;
+  const power = reading.batteryPowerW;
+  const surplus =
+    gridPowerW !== undefined && loadPowerW !== undefined ? gridPowerW + (solarPowerW ?? 0) - loadPowerW : undefined;
+  if (reading.batteryCurrentSigned && current !== undefined) {
+    direction = Math.abs(current) < 0.05 ? "idle" : current > 0 ? "charging" : "discharging";
+  } else if (power !== undefined && power < 0) {
+    direction = "discharging";
+  } else if (surplus !== undefined && Math.abs(surplus) > 50) {
+    direction = surplus > 0 ? "charging" : "discharging";
+  } else if (power !== undefined || current !== undefined) {
+    direction = Math.abs(power ?? 0) < 20 && Math.abs(current ?? 0) < 0.5 ? "idle" : "unknown";
   }
 
   const now = options.now ?? new Date();
-  const message: TaqatiTelemetryMessage = {
+  return {
     schemaVersion: 1,
     timestamp: parseGts(data.gts, options.timezoneOffset, now).toISOString(),
     inverter: {
@@ -128,17 +211,17 @@ export function mapLastData(data: SmartessLastData, options: MapOptions): Taqati
       solarPowerW,
       loadPowerW,
       gridPowerW,
-      gridVoltageV: toNumber(find(LABELS.gridVoltage)),
-      gridFrequencyHz: toNumber(find(LABELS.gridFrequency)),
+      temperatureC: reading.inverterTemperatureC,
+      gridVoltageV: reading.gridVoltageV,
+      gridFrequencyHz: reading.gridFrequencyHz,
     },
     battery: {
       soc,
-      voltageV: batteryVoltage,
-      currentA: batteryCurrent,
-      powerW: batteryPowerRaw === undefined ? undefined : Math.abs(Math.round(batteryPowerRaw)),
+      voltageV: reading.batteryVoltageV,
+      currentA: current === undefined ? undefined : Math.abs(current),
+      powerW: power === undefined ? undefined : Math.abs(Math.round(power)),
       direction,
     },
-    meta: { source: "smartess-cloud", extra },
+    meta: { source: "smartess-cloud", extra: reading.extra },
   };
-  return message;
 }
