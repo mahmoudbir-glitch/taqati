@@ -1,0 +1,21 @@
+node_modules/
+.pnpm-store/
+.next/
+dist/
+build/
+coverage/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+.vscode/
+.idea/
+
+# Local databases / telemetry
+*.db
+*.sqlite
+*.sqlite3
+
+# OS
+Thumbs.db
