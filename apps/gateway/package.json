@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@taqati/shared": "workspace:*",
     "mqtt": "^5.13.0",
     "serialport": "^13.0.0"
   },
