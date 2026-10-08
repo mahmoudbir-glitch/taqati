@@ -1,5 +1,7 @@
 import { Controller, Get, Module } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
+import { TelemetryController } from "./telemetry.controller";
+import { TelemetryService } from "./telemetry.service";
 
 @Controller()
 class HealthController {
@@ -13,12 +15,16 @@ class HealthController {
   }
 }
 
-@Module({ controllers: [HealthController] })
+@Module({
+  controllers: [HealthController, TelemetryController],
+  providers: [TelemetryService],
+})
 class AppModule {}
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   app.enableCors();
+  app.setGlobalPrefix("api");
   await app.listen(Number(process.env.API_PORT ?? 4000));
 }
 
