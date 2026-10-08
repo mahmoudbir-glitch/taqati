@@ -2,10 +2,10 @@
 
 import { ArrowDownToLine, ArrowUpFromLine, Gauge } from "lucide-react";
 import { batteryState, batteryStateLabel, LOW_SOC } from "../../lib/energy";
-import { amps, kwh, percent, power, startOfDay, volts } from "../../lib/format";
+import { amps, kw, kwh, percent, power, startOfDay, volts } from "../../lib/format";
 import { TimeChart } from "../charts";
 import { useTelemetry } from "../telemetry-provider";
-import { DataGate, Ltr, PageHeader, StatTile } from "../ui";
+import { DataGate, Legend, Ltr, PageHeader, StatTile } from "../ui";
 
 const RING_RADIUS = 84;
 const RING_LENGTH = 2 * Math.PI * RING_RADIUS;
@@ -78,12 +78,13 @@ export function BatteryView() {
                 <StatTile label="فُرّغ اليوم" value={kwh(todayTotals.batteryDischargeWh)} icon={ArrowUpFromLine} color="var(--home)" />
                 <StatTile
                   label="أدنى / أعلى شحن اليوم"
-                  value={socValues.length ? `${Math.round(Math.min(...socValues))}% – ${Math.round(Math.max(...socValues))}%` : "—"}
+                  value={socValues.length > 1 ? `${Math.round(Math.min(...socValues))}% – ${Math.round(Math.max(...socValues))}%` : "—"}
                   icon={Gauge}
                   color="var(--battery)"
                 />
               </div>
 
+              {socValues.length > 1 ? (
               <section className="card">
                 <div className="card-head">
                   <div>
@@ -110,6 +111,28 @@ export function BatteryView() {
                   ]}
                 />
               </section>
+              ) : (
+              <section className="card">
+                <div className="card-head">
+                  <div>
+                    <h2 className="card-title">شحن وتفريغ البطارية اليوم</h2>
+                    <span className="card-sub">القدرة بالكيلوواط (kW) — المصدر لا يحتفظ بسجل لنسبة الشحن</span>
+                  </div>
+                  <Legend items={[{ label: "شحن", color: "var(--battery)" }, { label: "تفريغ", color: "var(--home)" }]} />
+                </div>
+                <TimeChart
+                  label="قدرة شحن البطارية وتفريغها خلال اليوم"
+                  start={dayStart}
+                  end={dayStart + 24 * 3_600_000}
+                  formatValue={kw}
+                  formatTick={(watts) => String(Number((watts / 1000).toFixed(2)))}
+                  series={[
+                    { key: "charge", label: "شحن", color: "var(--battery)", area: true, points: today.map((reading) => ({ at: reading.at, value: Math.max(reading.batteryW, 0) })) },
+                    { key: "discharge", label: "تفريغ", color: "var(--home)", points: today.map((reading) => ({ at: reading.at, value: Math.max(-reading.batteryW, 0) })) },
+                  ]}
+                />
+              </section>
+              )}
             </>
           );
         }}

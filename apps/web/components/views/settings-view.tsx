@@ -1,11 +1,12 @@
 "use client";
 
-import { CircleCheck, CloudOff, PlugZap, Save, ServerOff, Trash2, TriangleAlert } from "lucide-react";
+import { CircleCheck, CloudOff, LogOut, PlugZap, Save, ServerOff, Trash2, TriangleAlert } from "lucide-react";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import {
   ApiError,
-  apiConfig,
+  fetchBuiltinStatus,
   fetchSmartessStatus,
+  type BuiltinStatus,
   removeSmartess,
   saveSmartess,
   testSmartess,
@@ -14,6 +15,7 @@ import {
   type SmartessTestResult,
 } from "../../lib/api";
 import { dateTime, kw, percent } from "../../lib/format";
+import { useTelemetry } from "../telemetry-provider";
 import { EmptyState, Ltr, PageHeader } from "../ui";
 
 const SOURCE_LABEL: Record<SmartessStatus["source"], string> = {
@@ -37,7 +39,121 @@ function explain(error: unknown): string {
   return "تعذّر الاتصال بخادم طاقتي.";
 }
 
+const ENV_NOTE: Record<"no-account" | "no-password", string> = {
+  "no-account": "لم يُضبط حساب SmartESS في بيئة النشر بعد.",
+  "no-password": "حساب SmartESS مضبوط، لكن كلمة مرور الموقع ناقصة، فلا تُعرض القراءات حمايةً لبياناتك.",
+};
+
+/** Shown when nothing is connected: how to connect SmartESS from the hosting settings. */
+function SetupGuide({ reason }: { reason?: "no-account" | "no-password" }) {
+  return (
+    <main className="page">
+      <PageHeader title="الإعدادات" subtitle="ربط الإنفرتر بحساب SmartESS" />
+      <EmptyState icon={CloudOff} title="الموقع يعرض بيانات تجريبية" message={reason ? ENV_NOTE[reason] : "لم يُربط حساب SmartESS بهذا الموقع بعد."} />
+      <section className="card">
+        <div className="card-head">
+          <h2 className="card-title">ربط حساب SmartESS</h2>
+        </div>
+        <p className="card-sub" style={{ marginBottom: 10 }}>
+          أضف المتغيرات التالية في إعدادات المشروع على منصة النشر (Environment Variables) ثم أعد النشر. تبقى في الخادم ولا تصل إلى المتصفح.
+        </p>
+        <dl className="kv">
+          <div><dt>اسم مستخدم SmartESS</dt><dd><Ltr>SMARTESS_USERNAME</Ltr></dd></div>
+          <div><dt>كلمة مرور SmartESS</dt><dd><Ltr>SMARTESS_PASSWORD</Ltr></dd></div>
+          <div><dt>كلمة مرور دخول هذا الموقع (8 أحرف على الأقل)</dt><dd><Ltr>TAQATI_PASSWORD</Ltr></dd></div>
+        </dl>
+      </section>
+    </main>
+  );
+}
+
+/** Built-in backend: the account lives in the server environment, so this is a status view. */
+function BuiltinSettings() {
+  const { signOut } = useTelemetry();
+  const [status, setStatus] = useState<BuiltinStatus | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchBuiltinStatus()
+      .then((value) => !cancelled && setStatus(value))
+      .catch(() => !cancelled && setFailed(true));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return (
+    <main className="page">
+      <PageHeader title="الإعدادات" subtitle="ربط الإنفرتر بحساب SmartESS" />
+
+      <section className="card">
+        <div className="card-head">
+          <h2 className="card-title">حالة الاتصال</h2>
+          {status && (
+            <span className="status-line" data-ok={status.ok} style={{ fontSize: 14 }}>
+              <span className="dot" />
+              {status.ok ? "متصل بـ SmartESS" : "تعذّر الاتصال بـ SmartESS"}
+            </span>
+          )}
+        </div>
+        {failed ? (
+          <p className="banner" data-severity="critical" role="alert">
+            <ServerOff size={18} aria-hidden />
+            <span>تعذّر قراءة حالة الاتصال.</span>
+          </p>
+        ) : !status ? (
+          <div className="skeleton" style={{ height: 150 }} aria-busy="true" />
+        ) : (
+          <dl className="kv">
+            <div><dt>المصدر</dt><dd>سحابة SmartESS مباشرة</dd></div>
+            <div><dt>اسم المستخدم</dt><dd><Ltr>{status.username}</Ltr></dd></div>
+            {status.ok ? (
+              <>
+                <div><dt>رقم <Ltr>Datalogger (PN)</Ltr></dt><dd><Ltr>{status.devicePn}</Ltr></dd></div>
+                <div><dt>الرقم التسلسلي <Ltr>(SN)</Ltr></dt><dd><Ltr>{status.deviceSn}</Ltr></dd></div>
+                <div><dt>آخر قراءة</dt><dd>{status.lastReadingAt ? dateTime(new Date(status.lastReadingAt).getTime()) : "—"}</dd></div>
+              </>
+            ) : (
+              <div><dt>الخطأ</dt><dd><Ltr>{status.error}</Ltr></dd></div>
+            )}
+          </dl>
+        )}
+        <p className="card-sub" style={{ marginTop: 12 }}>
+          بيانات الحساب محفوظة في إعدادات منصة النشر (<Ltr>SMARTESS_USERNAME</Ltr> و<Ltr>SMARTESS_PASSWORD</Ltr>). لتغييرها عدّلها هناك ثم أعد النشر.
+        </p>
+      </section>
+
+      <section className="card">
+        <div className="card-head">
+          <h2 className="card-title">الجلسة</h2>
+        </div>
+        <button type="button" className="button" onClick={() => void signOut()}>
+          <LogOut size={18} aria-hidden />
+          تسجيل الخروج
+        </button>
+      </section>
+    </main>
+  );
+}
+
 export function SettingsView() {
+  const { backend } = useTelemetry();
+  if (!backend) {
+    return (
+      <main className="page">
+        <PageHeader title="الإعدادات" subtitle="ربط الإنفرتر بحساب SmartESS" />
+        <div className="skeleton" style={{ height: 220 }} aria-busy="true" />
+      </main>
+    );
+  }
+  if (backend.kind === "external") return <ExternalSettings />;
+  if (backend.kind === "builtin") return <BuiltinSettings />;
+  return <SetupGuide reason={backend.reason} />;
+}
+
+/** A hosted Taqati API: the account is saved there, encrypted, with the admin token. */
+function ExternalSettings() {
   const [status, setStatus] = useState<SmartessStatus | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [account, setAccount] = useState<SmartessAccount>(emptyAccount);
@@ -56,25 +172,8 @@ export function SettingsView() {
   }, []);
 
   useEffect(() => {
-    if (apiConfig.configured) void load();
+    void load();
   }, [load]);
-
-  if (!apiConfig.configured) {
-    return (
-      <main className="page">
-        <PageHeader title="الإعدادات" subtitle="ربط الإنفرتر بحساب SmartESS" />
-        <EmptyState
-          icon={CloudOff}
-          title="إعداد SmartESS يحتاج خادم طاقتي"
-          message="هذه النسخة تعمل ببيانات تجريبية دون خادم. لربط حساب SmartESS شغّل خادم طاقتي ثم اضبط عنوانه ومعرّف الموقع في بيئة نشر الواجهة."
-        >
-          <p className="card-sub">
-            <Ltr>NEXT_PUBLIC_TAQATI_API_URL</Ltr> و<Ltr>NEXT_PUBLIC_TAQATI_SITE_ID</Ltr>
-          </p>
-        </EmptyState>
-      </main>
-    );
-  }
 
   const set = <K extends keyof SmartessAccount>(key: K, value: SmartessAccount[K]) => setAccount((current) => ({ ...current, [key]: value }));
   const hasSavedPassword = status?.source === "database";

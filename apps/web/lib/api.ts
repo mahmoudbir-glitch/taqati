@@ -1,9 +1,63 @@
 import type { ApiTelemetry, DailyEnergy, InverterStatus, Reading } from "./types";
 
-const apiBase = process.env.NEXT_PUBLIC_TAQATI_API_URL?.replace(/\/$/, "") ?? "";
-const siteId = process.env.NEXT_PUBLIC_TAQATI_SITE_ID ?? "";
+const externalBase = process.env.NEXT_PUBLIC_TAQATI_API_URL?.replace(/\/$/, "") ?? "";
+const externalSite = process.env.NEXT_PUBLIC_TAQATI_SITE_ID ?? "";
 
-export const apiConfig = { apiBase, siteId, configured: Boolean(apiBase && siteId) } as const;
+/** A separately hosted Taqati API, chosen at build time. */
+export const apiConfig = { apiBase: externalBase, siteId: externalSite, configured: Boolean(externalBase && externalSite) } as const;
+
+// Requests go to the external API when one is configured, otherwise to this
+// site's own /api routes (the built-in SmartESS backend), which need no base URL.
+const apiBase = apiConfig.configured ? externalBase : "";
+const siteId = apiConfig.configured ? externalSite : "home";
+
+/**
+ * Where readings come from:
+ * - "external": a hosted Taqati API;
+ * - "builtin": this site reading SmartESS itself, behind a sign-in (`locked` until signed in);
+ * - "none": nothing is configured, so demo data is shown.
+ */
+export type BackendInfo = { kind: "external" | "builtin" | "none"; locked: boolean; reason?: "no-account" | "no-password" };
+
+export async function resolveBackend(): Promise<BackendInfo> {
+  if (apiConfig.configured) return { kind: "external", locked: false };
+  try {
+    const response = await fetch("/api/config", { cache: "no-store" });
+    const body = (await response.json()) as { backend?: string; authenticated?: boolean; reason?: BackendInfo["reason"] };
+    if (response.ok && body.backend === "smartess") return { kind: "builtin", locked: !body.authenticated };
+    return { kind: "none", locked: false, reason: body.reason };
+  } catch {
+    return { kind: "none", locked: false };
+  }
+}
+
+/** Signs in to the built-in backend; resolves to an error message, or null on success. */
+export async function signIn(password: string): Promise<string | null> {
+  try {
+    const response = await fetch("/api/auth/login", {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password }),
+    });
+    if (response.ok) return null;
+    if (response.status === 401) return "كلمة المرور غير صحيحة.";
+    if (response.status === 429) return "محاولات كثيرة. انتظر دقيقة ثم حاول مجددًا.";
+    return "تعذّر تسجيل الدخول.";
+  } catch {
+    return "تعذّر الاتصال بالموقع.";
+  }
+}
+
+export async function signOut() {
+  await fetch("/api/auth/logout", { method: "POST", cache: "no-store" }).catch(() => undefined);
+}
+
+export type BuiltinStatus =
+  | { ok: true; username: string; devicePn: string; deviceSn: string; lastReadingAt: string | null }
+  | { ok: false; username: string; error: string };
+
+export const fetchBuiltinStatus = async () => (await getJson(`/api/sites/${siteId}/smartess`)) as BuiltinStatus;
 
 // Prisma Decimal columns are serialized as strings by the API.
 const num = (value: number | string | null | undefined) => {
@@ -43,7 +97,7 @@ function toReading(row: ApiTelemetry): Reading | null {
 
 async function getJson(path: string): Promise<unknown> {
   const response = await fetch(`${apiBase}${path}`, { cache: "no-store" });
-  if (!response.ok) throw new Error(`request failed with status ${response.status}`);
+  if (!response.ok) throw new ApiError(response.status, `request failed with status ${response.status}`);
   return response.json();
 }
 

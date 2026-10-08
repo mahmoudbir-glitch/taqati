@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { deviceFromSn, parseLastData, type SmartessPar } from "./smartess.client";
 import { decryptSecret, encryptSecret } from "./smartess.crypto";
-import { extractReading, mapLastData, parseGts } from "./smartess.mapper";
+import { extractReading, mapDayRows, mapLastData, parseGts } from "./smartess.mapper";
 
 const par = (name: string, val: string, unit?: string): SmartessPar => ({ id: "", par: name, val, unit });
 const options = { timezoneOffset: "+03:00", now: new Date("2026-10-08T10:00:00Z") };
@@ -68,6 +68,27 @@ test("epoch gts is local wall-clock time encoded as UTC+8", () => {
   assert.equal(parseGts("1791443056", "+03:00", now).toISOString(), "2026-10-08T12:04:16.000Z");
   // A shifted value that would be in the future falls back to the raw epoch.
   assert.equal(parseGts("1791443056303", "+03:00", new Date("2026-10-08T08:00:00Z")).toISOString(), "2026-10-08T07:04:16.303Z");
+});
+
+test("the day table maps to signed readings, oldest first", () => {
+  const titles = ["id", "Timestamp", "Grid Power", "Output Active Power", "Battery Voltage", "Battery Current", "Battery Power", "PV Power", "PV Charge Power", "Battery Current"];
+  const readings = mapDayRows(
+    {
+      titles,
+      rows: [
+        ["b", "2026-10-08 15:04:16", "0", "1126", "50.0", "12.6", "595", "1817", "595", "99"],
+        ["a", "2026-10-08 02:00:00", "0", "400", "49.0", "8.2", "400", "0", "0", "99"],
+        ["x", "not a time", "0", "0", "0", "0", "0", "0", "0", "0"],
+      ],
+    },
+    "+03:00",
+  );
+  assert.equal(readings.length, 2);
+  assert.equal(readings[0]?.timestamp, "2026-10-07T23:00:00.000Z");
+  assert.equal(readings[0]?.batteryPowerW, -400, "no sun and a load means the battery is discharging");
+  assert.equal(readings[0]?.batteryCurrentA, -8.2, "the first Battery Current column is used");
+  assert.equal(readings[1]?.batteryPowerW, 595);
+  assert.equal(readings[1]?.solarPowerW, 1817);
 });
 
 test("stored secrets round-trip and reject a different key", () => {

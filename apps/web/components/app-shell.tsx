@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import type { DataMode } from "../lib/types";
+import { LoginView } from "./login-view";
 import { useTelemetry } from "./telemetry-provider";
 
 type NavItem = { href: string; label: string; icon: LucideIcon };
@@ -25,6 +26,7 @@ const MODE_LABEL: Record<DataMode, string> = {
   live: "مباشر",
   demo: "بيانات تجريبية",
   error: "غير متصل",
+  locked: "مقفل",
 };
 
 const isActive = (pathname: string, href: string) => (href === "/" ? pathname === "/" : pathname.startsWith(href));
@@ -88,7 +90,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             </Link>
           </div>
         </header>
-        <div className="container">{children}</div>
+        <div className="container">{ready && mode === "locked" ? <LoginView /> : children}</div>
       </div>
 
       <nav className="bottom-nav" aria-label="التنقل السفلي">

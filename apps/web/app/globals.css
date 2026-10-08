@@ -197,6 +197,7 @@ h1, h2, h3, p { margin: 0; }
 .mode-badge[data-mode="live"] { color: var(--accent-ink); }
 .mode-badge[data-mode="demo"] { color: var(--muted); }
 .mode-badge[data-mode="error"] { color: var(--critical); }
+.mode-badge[data-mode="locked"] { color: var(--muted); }
 
 .bottom-nav {
   position: fixed;
