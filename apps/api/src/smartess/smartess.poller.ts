@@ -82,7 +82,14 @@ export class SmartessPoller implements OnModuleInit, OnModuleDestroy {
     if (!settings) return;
 
     try {
-      await this.ensureSiteAndGateway(settings);
+      await this.telemetry.ensureSiteAndGateway({
+        siteId: settings.siteId,
+        gatewayId: settings.gatewayId,
+        serialNumber: settings.client.device.pn,
+        siteName: "SmartESS site",
+        gatewayName: "SmartESS cloud",
+        model: "Wi-Fi Plug Pro RTU",
+      });
     } catch (error) {
       this.logger.error(`SmartESS bootstrap failed: ${error instanceof Error ? error.message : String(error)}`);
       return;
@@ -100,31 +107,6 @@ export class SmartessPoller implements OnModuleInit, OnModuleDestroy {
   onModuleDestroy() {
     this.stopped = true;
     if (this.timer) clearTimeout(this.timer);
-  }
-
-  /** Creates the organization/site/gateway rows that telemetry rows reference. */
-  private async ensureSiteAndGateway(settings: PollerSettings) {
-    const organization = await prisma.organization.upsert({
-      where: { slug: "taqati-default" },
-      update: {},
-      create: { name: "Taqati", slug: "taqati-default" },
-    });
-    await prisma.site.upsert({
-      where: { id: settings.siteId },
-      update: {},
-      create: { id: settings.siteId, organizationId: organization.id, name: "SmartESS site" },
-    });
-    await prisma.gateway.upsert({
-      where: { id: settings.gatewayId },
-      update: {},
-      create: {
-        id: settings.gatewayId,
-        siteId: settings.siteId,
-        serialNumber: settings.client.device.pn,
-        name: "SmartESS cloud",
-        model: "Wi-Fi Plug Pro RTU",
-      },
-    });
   }
 
   private async pollOnce(client: SmartessClient, settings: PollerSettings) {
