@@ -1,6 +1,7 @@
 import mqtt from "mqtt";
 
 const mqttUrl = process.env.MQTT_URL ?? "mqtt://localhost:1883";
+const siteId = process.env.SITE_ID ?? "development-site";
 const gatewayId = process.env.GATEWAY_ID ?? "development-gateway";
 
 const client = mqtt.connect(mqttUrl, {
@@ -10,12 +11,16 @@ const client = mqtt.connect(mqttUrl, {
 });
 
 client.on("connect", () => {
-  const topic = `taqati/v1/gateways/${gatewayId}/status`;
-  client.publish(topic, JSON.stringify({
-    gatewayId,
-    status: "ONLINE",
-    timestamp: new Date().toISOString(),
-  }), { qos: 1, retain: true });
+  const topic = `taqati/v1/sites/${siteId}/gateways/${gatewayId}/status`;
+  client.publish(
+    topic,
+    JSON.stringify({
+      gatewayId,
+      status: "ONLINE",
+      timestamp: new Date().toISOString(),
+    }),
+    { qos: 1, retain: true },
+  );
   console.log(`[gateway] connected to MQTT as ${gatewayId}`);
 });
 
