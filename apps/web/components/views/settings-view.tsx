@@ -1,233 +1,367 @@
 "use client";
 
-import { CircleCheck, PlugZap, RotateCcw, Save, ServerOff } from "lucide-react";
-import { useState, type FormEvent } from "react";
-import { apiConfig, checkHealth } from "../../lib/api";
-import { CURRENCIES } from "../../lib/settings";
-import type { DataMode, Settings, ThemeChoice } from "../../lib/types";
+import { CircleCheck, CloudOff, LogOut, PlugZap, Save, ServerOff, Trash2, TriangleAlert } from "lucide-react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
+import {
+  ApiError,
+  fetchBuiltinStatus,
+  fetchSmartessStatus,
+  type BuiltinStatus,
+  removeSmartess,
+  saveSmartess,
+  testSmartess,
+  type SmartessAccount,
+  type SmartessStatus,
+  type SmartessTestResult,
+} from "../../lib/api";
+import { dateTime, kw, percent } from "../../lib/format";
 import { useTelemetry } from "../telemetry-provider";
-import { Ltr, PageHeader, Segmented } from "../ui";
+import { EmptyState, Ltr, PageHeader } from "../ui";
 
-const THEMES: ReadonlyArray<{ value: ThemeChoice; label: string }> = [
-  { value: "system", label: "حسب الجهاز" },
-  { value: "light", label: "فاتح" },
-  { value: "dark", label: "داكن" },
-];
-
-const MODE_TEXT: Record<DataMode, string> = {
-  live: "متصل بخادم طاقتي ويعرض قراءات حية",
-  demo: "لم يُضبط خادم؛ تُعرض بيانات تجريبية مولّدة داخل المتصفح",
-  error: "الخادم مضبوط لكن تعذّر الوصول إليه",
+const SOURCE_LABEL: Record<SmartessStatus["source"], string> = {
+  database: "حساب محفوظ في الخادم",
+  environment: "حساب من متغيرات بيئة الخادم",
+  none: "غير مضبوط",
 };
 
-type Draft = {
-  siteName: string;
-  currency: string;
-  tariff: string;
-  arrayKw: string;
-  inverterKw: string;
-  batteryKwh: string;
-  reserveSoc: string;
+const emptyAccount: SmartessAccount = { username: "", password: "", devicePn: "", deviceSn: "", enabled: true };
+
+type Busy = "save" | "test" | "remove" | null;
+type Notice = { ok: boolean; text: string } | null;
+
+function explain(error: unknown): string {
+  if (error instanceof ApiError) {
+    if (error.status === 401) return "رمز الإدارة غير صحيح.";
+    if (error.status === 503) return "الخادم غير مهيأ للحفظ: اضبط ADMIN_TOKEN في بيئة الخادم.";
+    if (error.status === 400) return `البيانات المدخلة غير مقبولة (${error.message}).`;
+    return `رفض الخادم الطلب (${error.status}).`;
+  }
+  return "تعذّر الاتصال بخادم طاقتي.";
+}
+
+const ENV_NOTE: Record<"no-account" | "no-password", string> = {
+  "no-account": "لم يُضبط حساب SmartESS في بيئة النشر بعد.",
+  "no-password": "حساب SmartESS مضبوط، لكن كلمة مرور الموقع ناقصة، فلا تُعرض القراءات حمايةً لبياناتك.",
 };
 
-const toDraft = (settings: Settings): Draft => ({
-  siteName: settings.siteName,
-  currency: settings.currency,
-  tariff: String(settings.tariff),
-  arrayKw: String(settings.arrayPowerW / 1000),
-  inverterKw: String(settings.inverterPowerW / 1000),
-  batteryKwh: String(settings.batteryCapacityWh / 1000),
-  reserveSoc: String(settings.reserveSoc),
-});
-
-type NumberField = { key: Exclude<keyof Draft, "siteName" | "currency">; label: string; hint: string; min: number; max: number; step: number };
-
-const NUMBER_FIELDS: readonly NumberField[] = [
-  { key: "tariff", label: "تعرفة الكيلوواط ساعة", hint: "سعر kWh من الشبكة بالعملة المختارة؛ يُستخدم لحساب التوفير.", min: 0, max: 1_000_000, step: 0.01 },
-  { key: "arrayKw", label: "قدرة الألواح (kW)", hint: "مجموع القدرة الاسمية للألواح المركّبة.", min: 0.1, max: 1000, step: 0.1 },
-  { key: "inverterKw", label: "قدرة الإنفرتر (kW)", hint: "تُستخدم لحساب نسبة الحمل وتنبيه الحمل المرتفع.", min: 0.1, max: 1000, step: 0.1 },
-  { key: "batteryKwh", label: "سعة البطارية (kWh)", hint: "تُستخدم لتقدير زمن الشحن والتفريغ.", min: 0.1, max: 10_000, step: 0.1 },
-  { key: "reserveSoc", label: "حد احتياط البطارية (%)", hint: "تنبيه حرج عند الوصول إلى هذه النسبة أو دونها.", min: 0, max: 90, step: 1 },
-];
-
-function SettingsForm({ initial, onSaved }: { initial: Settings; onSaved: () => void }) {
-  const { saveSettings } = useTelemetry();
-  const [draft, setDraft] = useState<Draft>(() => toDraft(initial));
-  const [error, setError] = useState("");
-
-  const set = (key: keyof Draft, value: string) => setDraft((current) => ({ ...current, [key]: value }));
-
-  const submit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!draft.siteName.trim()) {
-      setError("اكتب اسمًا للموقع.");
-      return;
-    }
-    for (const field of NUMBER_FIELDS) {
-      const value = Number(draft[field.key]);
-      if (draft[field.key].trim() === "" || !Number.isFinite(value) || value < field.min || value > field.max) {
-        setError(`قيمة «${field.label}» يجب أن تكون بين ${field.min} و${field.max}.`);
-        return;
-      }
-    }
-    setError("");
-    saveSettings({
-      ...initial,
-      siteName: draft.siteName,
-      currency: draft.currency,
-      tariff: Number(draft.tariff),
-      arrayPowerW: Number(draft.arrayKw) * 1000,
-      inverterPowerW: Number(draft.inverterKw) * 1000,
-      batteryCapacityWh: Number(draft.batteryKwh) * 1000,
-      reserveSoc: Number(draft.reserveSoc),
-    });
-    onSaved();
-  };
-
+/** Shown when nothing is connected: how to connect SmartESS from the hosting settings. */
+function SetupGuide({ reason }: { reason?: "no-account" | "no-password" }) {
   return (
-    <form onSubmit={submit} noValidate>
-      <div className="form two">
-        <div className="field">
-          <label htmlFor="siteName">اسم الموقع</label>
-          <input id="siteName" className="input" maxLength={40} value={draft.siteName} onChange={(event) => set("siteName", event.target.value)} />
-          <small>يظهر في أعلى التطبيق.</small>
+    <main className="page">
+      <PageHeader title="الإعدادات" subtitle="ربط الإنفرتر بحساب SmartESS" />
+      <EmptyState icon={CloudOff} title="الموقع يعرض بيانات تجريبية" message={reason ? ENV_NOTE[reason] : "لم يُربط حساب SmartESS بهذا الموقع بعد."} />
+      <section className="card">
+        <div className="card-head">
+          <h2 className="card-title">ربط حساب SmartESS</h2>
         </div>
-        <div className="field">
-          <label htmlFor="currency">العملة</label>
-          <select id="currency" className="input" value={draft.currency} onChange={(event) => set("currency", event.target.value)}>
-            {CURRENCIES.map((currency) => (
-              <option key={currency} value={currency}>{currency}</option>
-            ))}
-          </select>
-          <small>عملة عرض التوفير.</small>
-        </div>
-        {NUMBER_FIELDS.map((field) => (
-          <div className="field" key={field.key}>
-            <label htmlFor={field.key}>{field.label}</label>
-            <input
-              id={field.key}
-              className="input"
-              type="number"
-              inputMode="decimal"
-              dir="ltr"
-              lang="en"
-              min={field.min}
-              max={field.max}
-              step={field.step}
-              value={draft[field.key]}
-              onChange={(event) => set(field.key, event.target.value)}
-            />
-            <small>{field.hint}</small>
-          </div>
-        ))}
-      </div>
-      {error && (
-        <p className="banner" data-severity="critical" role="alert" style={{ marginTop: 14 }}>
-          {error}
+        <p className="card-sub" style={{ marginBottom: 10 }}>
+          أضف المتغيرات التالية في إعدادات المشروع على منصة النشر (Environment Variables) ثم أعد النشر. تبقى في الخادم ولا تصل إلى المتصفح.
         </p>
-      )}
-      <div className="actions" style={{ marginTop: 16 }}>
-        <button type="submit" className="button primary">
-          <Save size={18} aria-hidden />
-          حفظ الإعدادات
-        </button>
-      </div>
-    </form>
+        <dl className="kv">
+          <div><dt>اسم مستخدم SmartESS</dt><dd><Ltr>SMARTESS_USERNAME</Ltr></dd></div>
+          <div><dt>كلمة مرور SmartESS</dt><dd><Ltr>SMARTESS_PASSWORD</Ltr></dd></div>
+          <div><dt>كلمة مرور دخول هذا الموقع (8 أحرف على الأقل)</dt><dd><Ltr>TAQATI_PASSWORD</Ltr></dd></div>
+        </dl>
+      </section>
+    </main>
   );
 }
 
-type TestState = "idle" | "testing" | "ok" | "failed";
+/** Built-in backend: the account lives in the server environment, so this is a status view. */
+function BuiltinSettings() {
+  const { signOut } = useTelemetry();
+  const [status, setStatus] = useState<BuiltinStatus | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchBuiltinStatus()
+      .then((value) => !cancelled && setStatus(value))
+      .catch(() => !cancelled && setFailed(true));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return (
+    <main className="page">
+      <PageHeader title="الإعدادات" subtitle="ربط الإنفرتر بحساب SmartESS" />
+
+      <section className="card">
+        <div className="card-head">
+          <h2 className="card-title">حالة الاتصال</h2>
+          {status && (
+            <span className="status-line" data-ok={status.ok} style={{ fontSize: 14 }}>
+              <span className="dot" />
+              {status.ok ? "متصل بـ SmartESS" : "تعذّر الاتصال بـ SmartESS"}
+            </span>
+          )}
+        </div>
+        {failed ? (
+          <p className="banner" data-severity="critical" role="alert">
+            <ServerOff size={18} aria-hidden />
+            <span>تعذّر قراءة حالة الاتصال.</span>
+          </p>
+        ) : !status ? (
+          <div className="skeleton" style={{ height: 150 }} aria-busy="true" />
+        ) : (
+          <dl className="kv">
+            <div><dt>المصدر</dt><dd>سحابة SmartESS مباشرة</dd></div>
+            <div><dt>اسم المستخدم</dt><dd><Ltr>{status.username}</Ltr></dd></div>
+            {status.ok ? (
+              <>
+                <div><dt>رقم <Ltr>Datalogger (PN)</Ltr></dt><dd><Ltr>{status.devicePn}</Ltr></dd></div>
+                <div><dt>الرقم التسلسلي <Ltr>(SN)</Ltr></dt><dd><Ltr>{status.deviceSn}</Ltr></dd></div>
+                <div><dt>آخر قراءة</dt><dd>{status.lastReadingAt ? dateTime(new Date(status.lastReadingAt).getTime()) : "—"}</dd></div>
+              </>
+            ) : (
+              <div><dt>الخطأ</dt><dd><Ltr>{status.error}</Ltr></dd></div>
+            )}
+          </dl>
+        )}
+        <p className="card-sub" style={{ marginTop: 12 }}>
+          بيانات الحساب محفوظة في إعدادات منصة النشر (<Ltr>SMARTESS_USERNAME</Ltr> و<Ltr>SMARTESS_PASSWORD</Ltr>). لتغييرها عدّلها هناك ثم أعد النشر.
+        </p>
+      </section>
+
+      <section className="card">
+        <div className="card-head">
+          <h2 className="card-title">الجلسة</h2>
+        </div>
+        <button type="button" className="button" onClick={() => void signOut()}>
+          <LogOut size={18} aria-hidden />
+          تسجيل الخروج
+        </button>
+      </section>
+    </main>
+  );
+}
 
 export function SettingsView() {
-  const { settings, saveSettings, resetSettings, mode, ready } = useTelemetry();
-  const [savedAt, setSavedAt] = useState(0);
-  const [test, setTest] = useState<TestState>("idle");
+  const { backend } = useTelemetry();
+  if (!backend) {
+    return (
+      <main className="page">
+        <PageHeader title="الإعدادات" subtitle="ربط الإنفرتر بحساب SmartESS" />
+        <div className="skeleton" style={{ height: 220 }} aria-busy="true" />
+      </main>
+    );
+  }
+  if (backend.kind === "external") return <ExternalSettings />;
+  if (backend.kind === "builtin") return <BuiltinSettings />;
+  return <SetupGuide reason={backend.reason} />;
+}
 
-  const runTest = async () => {
-    setTest("testing");
+/** A hosted Taqati API: the account is saved there, encrypted, with the admin token. */
+function ExternalSettings() {
+  const [status, setStatus] = useState<SmartessStatus | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [account, setAccount] = useState<SmartessAccount>(emptyAccount);
+  const [token, setToken] = useState("");
+  const [busy, setBusy] = useState<Busy>(null);
+  const [notice, setNotice] = useState<Notice>(null);
+  const [testResult, setTestResult] = useState<SmartessTestResult | null>(null);
+
+  const load = useCallback(async () => {
     try {
-      setTest((await checkHealth()) ? "ok" : "failed");
+      setStatus(await fetchSmartessStatus());
+      setLoadFailed(false);
     } catch {
-      setTest("failed");
+      setLoadFailed(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const set = <K extends keyof SmartessAccount>(key: K, value: SmartessAccount[K]) => setAccount((current) => ({ ...current, [key]: value }));
+  const hasSavedPassword = status?.source === "database";
+
+  const validate = (): SmartessAccount | null => {
+    const clean = { ...account, username: account.username.trim(), devicePn: account.devicePn.trim(), deviceSn: account.deviceSn.trim() };
+    let problem = "";
+    if (!clean.username) problem = "اكتب اسم مستخدم SmartESS.";
+    else if (!clean.password && !hasSavedPassword) problem = "اكتب كلمة مرور SmartESS.";
+    else if (clean.devicePn && !/^[A-Za-z0-9]+$/.test(clean.devicePn)) problem = "رقم Datalogger (PN) يتكون من حروف إنجليزية وأرقام فقط.";
+    else if (clean.deviceSn && !/^[A-Za-z0-9]+$/.test(clean.deviceSn)) problem = "الرقم التسلسلي (SN) يتكون من حروف إنجليزية وأرقام فقط.";
+    else if (!token.trim()) problem = "اكتب رمز الإدارة.";
+    if (problem) {
+      setNotice({ ok: false, text: problem });
+      return null;
+    }
+    return clean;
+  };
+
+  const run = async (kind: Exclude<Busy, null>, action: () => Promise<void>) => {
+    setBusy(kind);
+    setNotice(null);
+    setTestResult(null);
+    try {
+      await action();
+    } catch (error) {
+      setNotice({ ok: false, text: explain(error) });
+    } finally {
+      setBusy(null);
     }
   };
 
-  const reset = () => {
-    if (window.confirm("إعادة كل الإعدادات إلى قيمها الافتراضية؟")) {
-      resetSettings();
-      setSavedAt(0);
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const clean = validate();
+    if (!clean) return;
+    void run("save", async () => {
+      setStatus(await saveSmartess(token.trim(), clean));
+      setAccount((current) => ({ ...current, password: "" }));
+      setNotice({ ok: true, text: clean.enabled ? "تم الحفظ وبدأ الخادم بسحب القراءات من SmartESS." : "تم الحفظ والسحب من SmartESS متوقف." });
+    });
+  };
+
+  const test = () => {
+    const clean = validate();
+    if (!clean) return;
+    void run("test", async () => setTestResult(await testSmartess(token.trim(), clean)));
+  };
+
+  const remove = () => {
+    if (!token.trim()) {
+      setNotice({ ok: false, text: "اكتب رمز الإدارة." });
+      return;
     }
+    if (!window.confirm("حذف حساب SmartESS المحفوظ في الخادم؟")) return;
+    void run("remove", async () => {
+      setStatus(await removeSmartess(token.trim()));
+      setAccount(emptyAccount);
+      setNotice({ ok: true, text: "تم حذف الحساب المحفوظ." });
+    });
   };
 
   return (
     <main className="page">
-      <PageHeader title="الإعدادات" subtitle="بيانات الموقع والمنظومة والمظهر" />
+      <PageHeader title="الإعدادات" subtitle="ربط الإنفرتر بحساب SmartESS" />
 
-      <section className="card">
-        <div className="card-head">
-          <h2 className="card-title">الموقع والمنظومة</h2>
-          {savedAt > 0 && (
-            <span className="status-line" data-ok="true" role="status" style={{ fontSize: 14 }}>
-              <CircleCheck size={16} aria-hidden />
-              تم الحفظ
+      {loadFailed && (
+        <div className="banner" data-severity="critical" role="alert">
+          <ServerOff size={18} aria-hidden />
+          <span>تعذّر الاتصال بخادم طاقتي لقراءة حالة SmartESS.</span>
+        </div>
+      )}
+
+      {status && (
+        <section className="card">
+          <div className="card-head">
+            <h2 className="card-title">حالة الاتصال</h2>
+            <span className="status-line" data-ok={status.polling && !status.lastError} style={{ fontSize: 14 }}>
+              <span className="dot" />
+              {status.polling ? (status.lastError ? "السحب يعمل لكن آخر محاولة فشلت" : "السحب يعمل") : "السحب متوقف"}
             </span>
+          </div>
+          <dl className="kv">
+            <div><dt>المصدر</dt><dd>{SOURCE_LABEL[status.source]}</dd></div>
+            <div><dt>اسم المستخدم</dt><dd><Ltr>{status.username ?? "—"}</Ltr></dd></div>
+            <div><dt>رقم Datalogger (PN)</dt><dd><Ltr>{status.devicePn ?? "—"}</Ltr></dd></div>
+            <div><dt>الرقم التسلسلي (SN)</dt><dd><Ltr>{status.deviceSn ?? "—"}</Ltr></dd></div>
+            <div><dt>آخر قراءة ناجحة</dt><dd>{status.lastSuccessAt ? dateTime(new Date(status.lastSuccessAt).getTime()) : "—"}</dd></div>
+            {status.lastError && <div><dt>آخر خطأ</dt><dd><Ltr>{status.lastError}</Ltr></dd></div>}
+          </dl>
+        </section>
+      )}
+
+      <section className="card">
+        <div className="card-head">
+          <h2 className="card-title">حساب SmartESS</h2>
+        </div>
+        <p className="card-sub" style={{ marginBottom: 14 }}>
+          اسم المستخدم وكلمة المرور هما نفسهما في تطبيق SmartESS على هاتفك. تُحفظ كلمة المرور مشفّرة في الخادم ولا تُعرض مرة أخرى.
+        </p>
+
+        {status && !status.canEdit && (
+          <div className="banner" data-severity="warning" role="status" style={{ marginBottom: 14 }}>
+            <TriangleAlert size={18} aria-hidden />
+            <span>
+              الخادم غير مهيأ للحفظ. اضبط <Ltr>ADMIN_TOKEN</Ltr> (16 حرفًا على الأقل) في بيئة الخادم ثم أعد تشغيله.
+            </span>
+          </div>
+        )}
+
+        <form onSubmit={submit} noValidate>
+          <div className="form two">
+            <div className="field">
+              <label htmlFor="smartess-username">اسم مستخدم SmartESS</label>
+              <input id="smartess-username" className="input" dir="ltr" autoComplete="off" autoCapitalize="none" spellCheck={false} maxLength={120} value={account.username} onChange={(event) => set("username", event.target.value)} />
+            </div>
+            <div className="field">
+              <label htmlFor="smartess-password">كلمة مرور SmartESS</label>
+              <input id="smartess-password" className="input" dir="ltr" type="password" autoComplete="new-password" maxLength={200} placeholder={hasSavedPassword ? "•••••••• (محفوظة)" : ""} value={account.password} onChange={(event) => set("password", event.target.value)} />
+              {hasSavedPassword && <small>اتركها فارغة للإبقاء على كلمة المرور المحفوظة.</small>}
+            </div>
+            <div className="field">
+              <label htmlFor="smartess-pn">رقم <Ltr>Datalogger (PN)</Ltr> <span className="muted">(اختياري)</span></label>
+              <input id="smartess-pn" className="input" dir="ltr" autoComplete="off" autoCapitalize="characters" spellCheck={false} maxLength={120} value={account.devicePn} onChange={(event) => set("devicePn", event.target.value)} />
+              <small>اتركه فارغًا ليكتشف الخادم الجهاز من حسابك. يلزم فقط إذا كان في الحساب أكثر من جهاز.</small>
+            </div>
+            <div className="field">
+              <label htmlFor="smartess-sn">الرقم التسلسلي للجهاز <Ltr>(SN)</Ltr> <span className="muted">(اختياري)</span></label>
+              <input id="smartess-sn" className="input" dir="ltr" autoComplete="off" autoCapitalize="characters" spellCheck={false} maxLength={120} value={account.deviceSn} onChange={(event) => set("deviceSn", event.target.value)} />
+              <small>كما يظهر في صفحة الجهاز في تطبيق SmartESS. اتركه فارغًا للاكتشاف التلقائي.</small>
+            </div>
+            <div className="field">
+              <label htmlFor="admin-token">رمز الإدارة</label>
+              <input id="admin-token" className="input" dir="ltr" type="password" autoComplete="off" value={token} onChange={(event) => setToken(event.target.value)} />
+              <small>
+                قيمة <Ltr>ADMIN_TOKEN</Ltr> في بيئة الخادم. لا تُحفظ في المتصفح.
+              </small>
+            </div>
+            <div className="field">
+              <label htmlFor="smartess-enabled" style={{ display: "flex", alignItems: "center", gap: 10, minHeight: 44 }}>
+                <input id="smartess-enabled" type="checkbox" style={{ width: 20, height: 20 }} checked={account.enabled} onChange={(event) => set("enabled", event.target.checked)} />
+                تفعيل السحب من SmartESS
+              </label>
+              <small>يقرأ الخادم بيانات الإنفرتر من سحابة SmartESS كل خمس دقائق.</small>
+            </div>
+          </div>
+
+          {notice && (
+            <p className="banner" data-severity={notice.ok ? "info" : "critical"} role={notice.ok ? "status" : "alert"} style={{ marginTop: 14 }}>
+              {notice.ok ? <CircleCheck size={18} aria-hidden /> : <TriangleAlert size={18} aria-hidden />}
+              <span>{notice.text}</span>
+            </p>
           )}
-        </div>
-        {/* Remounts with the stored values once they load, after a save, and after a reset. */}
-        <SettingsForm key={`${ready}-${JSON.stringify(settings)}`} initial={settings} onSaved={() => setSavedAt(Date.now())} />
-        <p className="card-sub" style={{ marginTop: 12 }}>تُحفظ هذه الإعدادات في هذا المتصفح فقط.</p>
-      </section>
 
-      <section className="card">
-        <div className="card-head">
-          <h2 className="card-title">المظهر</h2>
-        </div>
-        <Segmented label="المظهر" options={THEMES} value={settings.theme} onChange={(theme) => saveSettings({ ...settings, theme })} />
-      </section>
+          {testResult && (
+            <p className="banner" data-severity={testResult.ok ? "info" : "critical"} role={testResult.ok ? "status" : "alert"} style={{ marginTop: 14 }}>
+              {testResult.ok ? <CircleCheck size={18} aria-hidden /> : <TriangleAlert size={18} aria-hidden />}
+              {testResult.ok ? (
+                <span>
+                  نجح الاتصال بـ SmartESS (الجهاز <Ltr>{testResult.deviceSn}</Ltr>). الشمس <Ltr>{testResult.solarPowerW === null ? "—" : kw(testResult.solarPowerW)}</Ltr>، الحمل{" "}
+                  <Ltr>{testResult.loadPowerW === null ? "—" : kw(testResult.loadPowerW)}</Ltr>، البطارية{" "}
+                  <Ltr>{testResult.batterySoc === null ? "—" : percent(testResult.batterySoc)}</Ltr>.
+                </span>
+              ) : (
+                <span>
+                  فشل الاتصال بـ SmartESS: <Ltr>{testResult.error}</Ltr>
+                </span>
+              )}
+            </p>
+          )}
 
-      <section className="card">
-        <div className="card-head">
-          <h2 className="card-title">الاتصال بالخادم</h2>
-        </div>
-        <dl className="kv">
-          <div><dt>الحالة</dt><dd>{ready ? MODE_TEXT[mode] : "…"}</dd></div>
-          <div><dt>عنوان الخادم</dt><dd><Ltr>{apiConfig.apiBase || "—"}</Ltr></dd></div>
-          <div><dt>معرّف الموقع</dt><dd><Ltr>{apiConfig.siteId || "—"}</Ltr></dd></div>
-        </dl>
-        {apiConfig.configured ? (
-          <div className="actions" style={{ marginTop: 12 }}>
-            <button type="button" className="button" onClick={runTest} disabled={test === "testing"}>
-              <PlugZap size={18} aria-hidden />
-              {test === "testing" ? "جارٍ الاختبار…" : "اختبار الاتصال"}
+          <div className="actions" style={{ marginTop: 16 }}>
+            <button type="submit" className="button primary" disabled={busy !== null}>
+              <Save size={18} aria-hidden />
+              {busy === "save" ? "جارٍ الحفظ…" : "حفظ"}
             </button>
-            {test === "ok" && (
-              <span className="status-line" data-ok="true" role="status">
-                <CircleCheck size={16} aria-hidden />
-                الخادم يستجيب
-              </span>
-            )}
-            {test === "failed" && (
-              <span className="status-line" data-ok="false" role="status">
-                <ServerOff size={16} aria-hidden />
-                لا يستجيب الخادم
-              </span>
+            <button type="button" className="button" onClick={test} disabled={busy !== null}>
+              <PlugZap size={18} aria-hidden />
+              {busy === "test" ? "جارٍ الاختبار…" : "اختبار الاتصال"}
+            </button>
+            {hasSavedPassword && (
+              <button type="button" className="button" onClick={remove} disabled={busy !== null}>
+                <Trash2 size={18} aria-hidden />
+                {busy === "remove" ? "جارٍ الحذف…" : "حذف الحساب المحفوظ"}
+              </button>
             )}
           </div>
-        ) : (
-          <p className="card-sub" style={{ marginTop: 12 }}>
-            لعرض قراءات حية اضبط المتغيرين <Ltr>NEXT_PUBLIC_TAQATI_API_URL</Ltr> و<Ltr>NEXT_PUBLIC_TAQATI_SITE_ID</Ltr> في بيئة النشر ثم أعد بناء التطبيق.
-          </p>
-        )}
-      </section>
-
-      <section className="card">
-        <div className="card-head">
-          <h2 className="card-title">إعادة الضبط</h2>
-        </div>
-        <button type="button" className="button" onClick={reset}>
-          <RotateCcw size={18} aria-hidden />
-          استعادة الإعدادات الافتراضية
-        </button>
+        </form>
       </section>
     </main>
   );

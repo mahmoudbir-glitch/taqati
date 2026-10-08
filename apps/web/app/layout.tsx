@@ -3,7 +3,6 @@ import { IBM_Plex_Sans_Arabic } from "next/font/google";
 import type { ReactNode } from "react";
 import { AppShell } from "../components/app-shell";
 import { TelemetryProvider } from "../components/telemetry-provider";
-import { SETTINGS_KEY } from "../lib/settings";
 import "./globals.css";
 
 const sans = IBM_Plex_Sans_Arabic({
@@ -29,15 +28,9 @@ export const viewport: Viewport = {
   ],
 };
 
-// Applies a saved light/dark choice before first paint to avoid a theme flash.
-const themeScript = `try{var s=JSON.parse(localStorage.getItem(${JSON.stringify(SETTINGS_KEY)}));if(s&&(s.theme==="light"||s.theme==="dark"))document.documentElement.setAttribute("data-theme",s.theme)}catch(e){}`;
-
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
   return (
-    <html lang="ar" dir="rtl" className={sans.variable} suppressHydrationWarning>
-      <head>
-        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
-      </head>
+    <html lang="ar" dir="rtl" className={sans.variable}>
       <body>
         <TelemetryProvider>
           <AppShell>{children}</AppShell>

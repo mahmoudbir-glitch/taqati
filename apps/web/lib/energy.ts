@@ -1,11 +1,12 @@
 import { clockTime, THRESHOLD_W } from "./format";
-import type { EnergyTotals, Reading, Settings, SystemAlert, SystemEvent } from "./types";
+import type { EnergyTotals, Reading, SystemAlert, SystemEvent } from "./types";
 
 // A gap longer than this means the gateway was silent; no energy is assumed for it.
 const MAX_GAP_MS = 15 * 60_000;
 export const STALE_AFTER_MS = 15 * 60_000;
 const HOT_INVERTER_C = 60;
-const HIGH_LOAD_RATIO = 0.85;
+/** Battery charge (%) at or below which the app raises a critical alert. */
+export const LOW_SOC = 20;
 
 export const emptyTotals = (): EnergyTotals => ({
   solarWh: 0,
@@ -56,11 +57,6 @@ export function selfSufficiency(totals: EnergyTotals): number | null {
   return Math.min(100, Math.max(0, (1 - totals.gridImportWh / totals.loadWh) * 100));
 }
 
-/** Value of the consumption that was not bought from the grid. */
-export function savings(totals: EnergyTotals, tariff: number): number {
-  return (Math.max(totals.loadWh - totals.gridImportWh, 0) / 1000) * tariff;
-}
-
 export type BatteryState = "charging" | "discharging" | "idle";
 
 export const batteryState = (reading: Reading): BatteryState =>
@@ -71,21 +67,6 @@ export const batteryStateLabel: Record<BatteryState, string> = {
   discharging: "تفرغ",
   idle: "ثابتة",
 };
-
-/** Hours until the battery is full (charging) or reaches the reserve (discharging). */
-export function batteryEstimate(reading: Reading, settings: Settings): { hours: number; target: "full" | "reserve" } | null {
-  if (reading.soc === null || settings.batteryCapacityWh <= 0) return null;
-  const state = batteryState(reading);
-  if (state === "charging") {
-    const remainingWh = ((100 - reading.soc) / 100) * settings.batteryCapacityWh;
-    return remainingWh > 0 ? { hours: remainingWh / reading.batteryW, target: "full" } : null;
-  }
-  if (state === "discharging") {
-    const usableWh = ((reading.soc - settings.reserveSoc) / 100) * settings.batteryCapacityWh;
-    return usableWh > 0 ? { hours: usableWh / Math.abs(reading.batteryW), target: "reserve" } : null;
-  }
-  return null;
-}
 
 export function operatingMode(reading: Reading): string {
   const solar = reading.solarW > THRESHOLD_W;
@@ -102,7 +83,7 @@ export function operatingMode(reading: Reading): string {
 }
 
 /** Alerts that hold right now, derived from the latest reading. */
-export function deriveAlerts(latest: Reading, settings: Settings, now: number, checkStale: boolean): SystemAlert[] {
+export function deriveAlerts(latest: Reading, now: number, checkStale: boolean): SystemAlert[] {
   const alerts: SystemAlert[] = [];
   const add = (alert: Omit<SystemAlert, "at">) => alerts.push({ ...alert, at: latest.at });
 
@@ -123,18 +104,18 @@ export function deriveAlerts(latest: Reading, settings: Settings, now: number, c
 
   if (latest.soc !== null) {
     const discharging = latest.batteryW < -THRESHOLD_W;
-    if (latest.soc <= settings.reserveSoc) {
+    if (latest.soc <= LOW_SOC) {
       add({
         id: "soc-reserve",
         severity: "critical",
-        title: "البطارية عند حد الاحتياط",
-        message: `شحن البطارية ${Math.round(latest.soc)}% وهو عند حد الاحتياط (${settings.reserveSoc}%) أو دونه.`,
+        title: "شحن البطارية منخفض",
+        message: `شحن البطارية ${Math.round(latest.soc)}% وهو عند ${LOW_SOC}% أو دونه.`,
       });
-    } else if (discharging && latest.soc <= settings.reserveSoc + 10) {
+    } else if (discharging && latest.soc <= LOW_SOC + 10) {
       add({
         id: "soc-low",
         severity: "warning",
-        title: "البطارية تقترب من حد الاحتياط",
+        title: "البطارية تقترب من المستوى المنخفض",
         message: `شحن البطارية ${Math.round(latest.soc)}% وما زالت تفرغ. خفّف الأحمال غير الضرورية.`,
       });
     } else if (latest.soc >= 99 && latest.solarW > THRESHOLD_W) {
@@ -145,15 +126,6 @@ export function deriveAlerts(latest: Reading, settings: Settings, now: number, c
         message: "وقت مناسب لتشغيل الأحمال الثقيلة مثل الغسالة أو سخان الماء.",
       });
     }
-  }
-
-  if (settings.inverterPowerW > 0 && latest.loadW > settings.inverterPowerW * HIGH_LOAD_RATIO) {
-    add({
-      id: "high-load",
-      severity: "warning",
-      title: "حمل مرتفع",
-      message: `الحمل الحالي ${Math.round((latest.loadW / settings.inverterPowerW) * 100)}% من قدرة الإنفرتر.`,
-    });
   }
 
   if (latest.tempC !== null && latest.tempC >= HOT_INVERTER_C) {
@@ -174,7 +146,7 @@ export function deriveAlerts(latest: Reading, settings: Settings, now: number, c
 }
 
 /** State changes found in a series of readings (sorted oldest first), newest first. */
-export function deriveEvents(readings: readonly Reading[], settings: Settings): SystemEvent[] {
+export function deriveEvents(readings: readonly Reading[]): SystemEvent[] {
   const events: SystemEvent[] = [];
   for (let i = 1; i < readings.length; i += 1) {
     const prev = readings[i - 1];
@@ -197,7 +169,7 @@ export function deriveEvents(readings: readonly Reading[], settings: Settings): 
     if (wasSolar && !isSolar) push("solar-off", "info", "توقف الإنتاج الشمسي");
 
     if (prev.soc !== null && cur.soc !== null) {
-      if (prev.soc > settings.reserveSoc && cur.soc <= settings.reserveSoc) push("reserve", "critical", "وصلت البطارية إلى حد الاحتياط");
+      if (prev.soc > LOW_SOC && cur.soc <= LOW_SOC) push("reserve", "critical", `انخفض شحن البطارية إلى ${LOW_SOC}%`);
       if (prev.soc < 99.5 && cur.soc >= 99.5) push("full", "info", "اكتمل شحن البطارية");
     }
   }

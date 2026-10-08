@@ -55,21 +55,8 @@ export type EnergyTotals = {
 /** Energy totals for one local calendar day (`date` is YYYY-MM-DD). */
 export type DailyEnergy = EnergyTotals & { date: string };
 
-export type ThemeChoice = "system" | "light" | "dark";
-
-export type Settings = {
-  siteName: string;
-  currency: string;
-  /** Price of one grid kWh in `currency`. */
-  tariff: number;
-  arrayPowerW: number;
-  inverterPowerW: number;
-  batteryCapacityWh: number;
-  reserveSoc: number;
-  theme: ThemeChoice;
-};
-
-export type DataMode = "demo" | "live" | "error";
+/** "locked": a backend exists but the visitor has not signed in yet. */
+export type DataMode = "demo" | "live" | "error" | "locked";
 
 export type AlertSeverity = "critical" | "warning" | "info";
 

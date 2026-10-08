@@ -1,36 +1,29 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { apiConfig, fetchDaily, fetchReadings } from "../lib/api";
+import { ApiError, fetchDaily, fetchReadings, fetchSeries, resolveBackend, signOut as requestSignOut, type BackendInfo } from "../lib/api";
 import { demoDaily, demoToday } from "../lib/demo";
 import { deriveAlerts, deriveEvents, integrate } from "../lib/energy";
 import { dayKey, startOfDay } from "../lib/format";
-import {
-  ACKED_ALERTS_KEY,
-  applyTheme,
-  defaultSettings,
-  readStored,
-  sanitizeSettings,
-  SETTINGS_KEY,
-  writeStored,
-} from "../lib/settings";
-import type { DailyEnergy, DataMode, EnergyTotals, Reading, Settings, SystemAlert, SystemEvent } from "../lib/types";
+import { ACKED_ALERTS_KEY, readStored, writeStored } from "../lib/storage";
+import type { DailyEnergy, DataMode, EnergyTotals, Reading, SystemAlert, SystemEvent } from "../lib/types";
 
 const TICK_MS = 5000;
 const HISTORY_REFRESH_MS = 5 * 60_000;
-const HISTORY_LIMIT = 300; // the API maximum
 const DAILY_DAYS = 30;
 
 type TelemetryContextValue = {
   /** False until the first data (or the first failure) is known on the client. */
   ready: boolean;
   mode: DataMode;
+  /** Where readings come from; null until that is known. */
+  backend: BackendInfo | null;
   now: number;
   /** Readings since local midnight, oldest first. */
   today: Reading[];
   latest: Reading | null;
   todayTotals: EnergyTotals;
-  /** Daily totals, oldest first; null when the API cannot provide them. */
+  /** Daily totals, oldest first; null when the backend cannot provide them. */
   daily: DailyEnergy[] | null;
   alerts: SystemAlert[];
   events: SystemEvent[];
@@ -38,9 +31,9 @@ type TelemetryContextValue = {
   /** Number of unacknowledged warnings and critical alerts. */
   attentionCount: number;
   acknowledge: (id: string) => void;
-  settings: Settings;
-  saveSettings: (settings: Settings) => void;
-  resetSettings: () => void;
+  /** Asks again which backend is available, e.g. after signing in. */
+  refreshBackend: () => Promise<void>;
+  signOut: () => Promise<void>;
 };
 
 const TelemetryContext = createContext<TelemetryContextValue | null>(null);
@@ -56,37 +49,50 @@ type AckState = { day: string; ids: string[] };
 export function TelemetryProvider({ children }: { children: ReactNode }) {
   // Time-dependent values are set after mount so server and client render the same HTML.
   const [now, setNow] = useState(0);
-  const [settings, setSettings] = useState<Settings>(defaultSettings);
+  const [backend, setBackend] = useState<BackendInfo | null>(null);
   const [acked, setAcked] = useState<AckState>({ day: "", ids: [] });
-  const [liveReadings, setLiveReadings] = useState<Reading[]>([]);
+  const [liveSeries, setLiveSeries] = useState<Reading[]>([]);
+  const [liveLatest, setLiveLatest] = useState<Reading | null>(null);
   const [liveDaily, setLiveDaily] = useState<DailyEnergy[] | null>(null);
   const [answered, setAnswered] = useState(false);
   const [failed, setFailed] = useState(false);
 
-  useEffect(() => {
-    setSettings(sanitizeSettings(readStored<unknown>(SETTINGS_KEY, null)));
-    setAcked(readStored<AckState>(ACKED_ALERTS_KEY, { day: "", ids: [] }));
-    setNow(Date.now());
-    const timer = window.setInterval(() => setNow(Date.now()), TICK_MS);
-    return () => window.clearInterval(timer);
+  const refreshBackend = useCallback(async () => {
+    setBackend(await resolveBackend());
   }, []);
 
   useEffect(() => {
-    applyTheme(settings.theme);
-  }, [settings.theme]);
+    setAcked(readStored<AckState>(ACKED_ALERTS_KEY, { day: "", ids: [] }));
+    setNow(Date.now());
+    void refreshBackend();
+    const timer = window.setInterval(() => setNow(Date.now()), TICK_MS);
+    return () => window.clearInterval(timer);
+  }, [refreshBackend]);
+
+  const live = backend !== null && backend.kind !== "none";
+  const polling = live && !backend.locked;
 
   useEffect(() => {
-    if (!apiConfig.configured) return;
+    if (!polling) return;
     let cancelled = false;
+
+    // A 401 means the session ended: show the sign-in screen instead of an error.
+    const onFailure = (error: unknown) => {
+      if (cancelled) return;
+      if (error instanceof ApiError && error.status === 401) setBackend((current) => (current ? { ...current, locked: true } : current));
+      else setFailed(true);
+    };
 
     const loadHistory = async () => {
       try {
-        const rows = await fetchReadings(HISTORY_LIMIT);
+        // Both must answer before the first render, so the page never flashes "no readings".
+        const [rows, [row]] = await Promise.all([fetchSeries(startOfDay(Date.now())), fetchReadings(1)]);
         if (cancelled) return;
-        setLiveReadings(rows);
+        setLiveSeries(rows);
+        if (row) setLiveLatest(row);
         setFailed(false);
-      } catch {
-        if (!cancelled) setFailed(true);
+      } catch (error) {
+        onFailure(error);
       } finally {
         if (!cancelled) setAnswered(true);
       }
@@ -98,12 +104,9 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
         const [row] = await fetchReadings(1);
         if (cancelled) return;
         setFailed(false);
-        if (!row) return;
-        setLiveReadings((current) =>
-          current.some((reading) => reading.id === row.id) ? current : [...current, row].slice(-HISTORY_LIMIT),
-        );
-      } catch {
-        if (!cancelled) setFailed(true);
+        if (row) setLiveLatest((current) => (current?.id === row.id ? current : row));
+      } catch (error) {
+        onFailure(error);
       }
     };
 
@@ -129,32 +132,41 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
       window.clearInterval(latestTimer);
       window.clearInterval(historyTimer);
     };
-  }, []);
+  }, [polling]);
 
-  const mode: DataMode = !apiConfig.configured ? "demo" : failed ? "error" : "live";
-  const ready = now > 0 && (mode === "demo" || answered);
+  const signOut = useCallback(async () => {
+    await requestSignOut();
+    setLiveSeries([]);
+    setLiveLatest(null);
+    setLiveDaily(null);
+    setAnswered(false);
+    await refreshBackend();
+  }, [refreshBackend]);
+
+  const mode: DataMode = !live ? "demo" : backend.locked ? "locked" : failed ? "error" : "live";
+  const ready = now > 0 && backend !== null && (mode === "demo" || mode === "locked" || answered);
   const dayStart = now > 0 ? startOfDay(now) : 0;
   const dailySlot = Math.floor(now / HISTORY_REFRESH_MS);
 
   const today = useMemo(() => {
     if (now === 0) return [];
-    if (!apiConfig.configured) return demoToday(now, settings);
-    return liveReadings.filter((reading) => reading.at >= dayStart);
-  }, [now, dayStart, settings, liveReadings]);
+    if (!live) return demoToday(now);
+    // Today's curve is the stored series, extended by the newest raw reading.
+    const series = liveSeries.filter((reading) => reading.at >= dayStart);
+    const last = series[series.length - 1];
+    return liveLatest && liveLatest.at >= dayStart && (!last || liveLatest.at > last.at) ? [...series, liveLatest] : series;
+  }, [now, live, dayStart, liveSeries, liveLatest]);
 
   const daily = useMemo(() => {
-    if (apiConfig.configured) return liveDaily;
-    return dailySlot > 0 ? demoDaily(DAILY_DAYS, dailySlot * HISTORY_REFRESH_MS, settings) : null;
-  }, [dailySlot, settings, liveDaily]);
+    if (live) return liveDaily;
+    return dailySlot > 0 ? demoDaily(DAILY_DAYS, dailySlot * HISTORY_REFRESH_MS) : null;
+  }, [live, dailySlot, liveDaily]);
 
-  const latest = apiConfig.configured ? (liveReadings[liveReadings.length - 1] ?? null) : (today[today.length - 1] ?? null);
+  const latest = live ? liveLatest : (today[today.length - 1] ?? null);
 
   const todayTotals = useMemo(() => integrate(today), [today]);
-  const alerts = useMemo(
-    () => (latest && now > 0 ? deriveAlerts(latest, settings, now, apiConfig.configured) : []),
-    [latest, settings, now],
-  );
-  const events = useMemo(() => deriveEvents(today, settings), [today, settings]);
+  const alerts = useMemo(() => (latest && now > 0 ? deriveAlerts(latest, now, live) : []), [latest, now, live]);
+  const events = useMemo(() => deriveEvents(today), [today]);
 
   // Acknowledgements last for the day they were made.
   const todayKey = now > 0 ? dayKey(now) : "";
@@ -173,21 +185,11 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
     [todayKey],
   );
 
-  const saveSettings = useCallback((next: Settings) => {
-    const clean = sanitizeSettings(next);
-    setSettings(clean);
-    writeStored(SETTINGS_KEY, clean);
-  }, []);
-
-  const resetSettings = useCallback(() => {
-    setSettings(defaultSettings);
-    writeStored(SETTINGS_KEY, defaultSettings);
-  }, []);
-
   const value = useMemo<TelemetryContextValue>(
     () => ({
       ready,
       mode,
+      backend,
       now,
       today,
       latest,
@@ -198,11 +200,10 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
       ackedIds,
       attentionCount,
       acknowledge,
-      settings,
-      saveSettings,
-      resetSettings,
+      refreshBackend,
+      signOut,
     }),
-    [ready, mode, now, today, latest, todayTotals, daily, alerts, events, ackedIds, attentionCount, acknowledge, settings, saveSettings, resetSettings],
+    [ready, mode, backend, now, today, latest, todayTotals, daily, alerts, events, ackedIds, attentionCount, acknowledge, refreshBackend, signOut],
   );
 
   return <TelemetryContext.Provider value={value}>{children}</TelemetryContext.Provider>;

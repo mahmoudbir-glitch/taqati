@@ -2,8 +2,8 @@
 
 import { BatteryMedium, Cpu, Router, Sun, type LucideIcon } from "lucide-react";
 import type { CSSProperties, ReactNode } from "react";
-import { STALE_AFTER_MS } from "../../lib/energy";
-import { amps, dateTime, kw, kwh, percent, power, relativeTime, volts } from "../../lib/format";
+import { LOW_SOC, STALE_AFTER_MS } from "../../lib/energy";
+import { amps, dateTime, percent, power, relativeTime, volts } from "../../lib/format";
 import type { InverterStatus } from "../../lib/types";
 import { useTelemetry } from "../telemetry-provider";
 import { DataGate, Ltr, Meter, PageHeader } from "../ui";
@@ -55,7 +55,7 @@ const Row = ({ label, children }: { label: string; children: ReactNode }) => (
 );
 
 export function DevicesView() {
-  const { today, settings, now, mode } = useTelemetry();
+  const { today, now, mode } = useTelemetry();
 
   return (
     <main className="page">
@@ -64,8 +64,6 @@ export function DevicesView() {
         {(latest) => {
           const demo = mode === "demo";
           const fresh = demo || now - latest.at <= STALE_AFTER_MS;
-          const loadRatio = settings.inverterPowerW > 0 ? (latest.loadW / settings.inverterPowerW) * 100 : 0;
-          const solarRatio = settings.arrayPowerW > 0 ? (latest.solarW / settings.arrayPowerW) * 100 : 0;
           const peakSolar = today.reduce((peak, reading) => Math.max(peak, reading.solarW), 0);
           const lastSeen = demo ? "بيانات تجريبية" : `${dateTime(latest.at)} (${relativeTime(latest.at, now)})`;
 
@@ -74,15 +72,11 @@ export function DevicesView() {
               <DeviceCard icon={Cpu} color="var(--accent)" title="الإنفرتر" status={INVERTER_STATUS[latest.status]}>
                 <dl className="kv">
                   <Row label="المعرّف"><Ltr>{latest.inverterId ?? "—"}</Ltr></Row>
-                  <Row label="القدرة الاسمية"><Ltr>{kw(settings.inverterPowerW)}</Ltr></Row>
-                  <Row label="الحمل الحالي"><Ltr>{`${power(latest.loadW)} · ${percent(loadRatio)}`}</Ltr></Row>
+                  <Row label="الحمل الحالي"><Ltr>{power(latest.loadW)}</Ltr></Row>
                   <Row label="جهد الشبكة"><Ltr>{latest.gridV === null ? "—" : volts(latest.gridV)}</Ltr></Row>
                   <Row label="تردد الشبكة"><Ltr>{latest.gridHz === null ? "—" : `${latest.gridHz.toFixed(1)} Hz`}</Ltr></Row>
                   <Row label="الحرارة"><Ltr>{latest.tempC === null ? "—" : `${Math.round(latest.tempC)} °C`}</Ltr></Row>
                 </dl>
-                <div style={{ marginTop: 10 }}>
-                  <Meter value={loadRatio} color={loadRatio > 85 ? "var(--warning)" : "var(--home)"} label="نسبة الحمل من قدرة الإنفرتر" />
-                </div>
               </DeviceCard>
 
               <DeviceCard
@@ -94,7 +88,6 @@ export function DevicesView() {
                 <dl className="kv">
                   <Row label="المعرّف"><Ltr>{latest.gatewayId ?? "—"}</Ltr></Row>
                   <Row label="آخر قراءة">{lastSeen}</Row>
-                  <Row label="قراءات اليوم"><Ltr>{today.length}</Ltr></Row>
                   <Row label="مصدر البيانات">{demo ? "نموذج تجريبي داخل المتصفح" : "خادم طاقتي"}</Row>
                 </dl>
               </DeviceCard>
@@ -106,8 +99,8 @@ export function DevicesView() {
                 status={
                   latest.soc === null
                     ? { label: "لا توجد قراءة شحن", ok: false }
-                    : latest.soc <= settings.reserveSoc
-                      ? { label: "عند حد الاحتياط", ok: false }
+                    : latest.soc <= LOW_SOC
+                      ? { label: "شحن منخفض", ok: false }
                       : { label: "سليمة", ok: true }
                 }
               >
@@ -115,13 +108,11 @@ export function DevicesView() {
                   <Row label="مستوى الشحن"><Ltr>{latest.soc === null ? "—" : percent(latest.soc)}</Ltr></Row>
                   <Row label="الجهد"><Ltr>{latest.batteryV === null ? "—" : volts(latest.batteryV)}</Ltr></Row>
                   <Row label="التيار"><Ltr>{latest.batteryA === null ? "—" : amps(latest.batteryA)}</Ltr></Row>
-                  <Row label="السعة"><Ltr>{kwh(settings.batteryCapacityWh)}</Ltr></Row>
-                  <Row label="حد الاحتياط"><Ltr>{percent(settings.reserveSoc)}</Ltr></Row>
                 </dl>
                 <div style={{ marginTop: 10 }}>
                   <Meter
                     value={latest.soc ?? 0}
-                    color={latest.soc !== null && latest.soc <= settings.reserveSoc ? "var(--critical)" : "var(--battery)"}
+                    color={latest.soc !== null && latest.soc <= LOW_SOC ? "var(--critical)" : "var(--battery)"}
                     label="مستوى شحن البطارية"
                   />
                 </div>
@@ -134,19 +125,14 @@ export function DevicesView() {
                 status={latest.solarW > 50 ? { label: "تنتج الآن", ok: true } : { label: "لا يوجد إنتاج الآن", ok: true }}
               >
                 <dl className="kv">
-                  <Row label="القدرة المركّبة"><Ltr>{kw(settings.arrayPowerW)}</Ltr></Row>
-                  <Row label="الإنتاج الحالي"><Ltr>{`${power(latest.solarW)} · ${percent(solarRatio)}`}</Ltr></Row>
+                  <Row label="الإنتاج الحالي"><Ltr>{power(latest.solarW)}</Ltr></Row>
                   <Row label="ذروة اليوم"><Ltr>{power(peakSolar)}</Ltr></Row>
                 </dl>
-                <div style={{ marginTop: 10 }}>
-                  <Meter value={solarRatio} color="var(--solar)" label="نسبة الإنتاج من القدرة المركّبة" />
-                </div>
               </DeviceCard>
             </div>
           );
         }}
       </DataGate>
-      <p className="card-sub">القدرات الاسمية والسعة تؤخذ من الإعدادات، وبقية القيم من آخر قراءة.</p>
     </main>
   );
 }

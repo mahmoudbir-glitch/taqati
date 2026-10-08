@@ -167,9 +167,30 @@ export interface MapOptions {
   now?: Date;
 }
 
-/** `gts` looks like "2026-10-08 11:50:00" in the device/site timezone. */
+const SERVER_OFFSET_MS = 8 * 3_600_000;
+const MAX_CLOCK_SKEW_MS = 15 * 60_000;
+
+/**
+ * `gts` is the time of the reading, either "2026-10-08 11:50:00" in the
+ * device/site timezone or an epoch number (ms or s).
+ *
+ * The epoch form is not a true instant: observed on the live service, it is the
+ * device's local wall-clock time encoded as if it were UTC+8 (the server's own
+ * zone), so a 15:04 reading in UTC+3 arrives as 07:04Z. It is shifted back to the
+ * device zone here; if that lands in the future the raw value is used instead.
+ */
 export function parseGts(gts: string | undefined, timezoneOffset: string, fallback: Date): Date {
   if (!gts) return fallback;
+  if (/^\d{10,13}$/.test(gts.trim())) {
+    const raw = Number(gts.trim());
+    const epoch = raw < 1e11 ? raw * 1000 : raw;
+    const zone = /^([+-])(\d{2}):(\d{2})$/.exec(timezoneOffset);
+    const zoneMs = zone ? (zone[1] === "-" ? -1 : 1) * (Number(zone[2]) * 60 + Number(zone[3])) * 60_000 : 0;
+    const latest = fallback.getTime() + MAX_CLOCK_SKEW_MS;
+    const candidates = [epoch + SERVER_OFFSET_MS - zoneMs, epoch];
+    const chosen = candidates.find((candidate) => candidate <= latest);
+    return chosen === undefined ? fallback : new Date(chosen);
+  }
   const match = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})$/.exec(gts.trim());
   if (!match) return fallback;
   const parsed = new Date(`${match[1]}T${match[2]}${timezoneOffset}`);
@@ -224,4 +245,74 @@ export function mapLastData(data: SmartessLastData, options: MapOptions): Taqati
     },
     meta: { source: "smartess-cloud", extra: reading.extra },
   };
+}
+
+/** One stored reading of the day table; battery values are signed (positive charging). */
+export interface DayReading {
+  timestamp: string;
+  solarPowerW: number | null;
+  loadPowerW: number | null;
+  gridPowerW: number | null;
+  batteryPowerW: number | null;
+  batteryVoltageV: number | null;
+  batteryCurrentA: number | null;
+  gridVoltageV: number | null;
+  gridFrequencyHz: number | null;
+  temperatureC: number | null;
+}
+
+/**
+ * Maps the day table (see `SmartessClient.fetchDayRows`) to readings, oldest
+ * first. The table has no battery charge level, and its battery power is a
+ * magnitude, so the direction comes from the energy balance of the same row.
+ */
+export function mapDayRows(table: { titles: string[]; rows: string[][] }, timezoneOffset: string): DayReading[] {
+  const column = (pattern: RegExp) => table.titles.findIndex((title) => pattern.test(text(title)));
+  const columns = {
+    time: column(/^timestamp$/i),
+    solar: column(/^pv power$/i),
+    solarCharge: column(/^pv charge power$/i),
+    load: column(/^output active power$/i),
+    grid: column(/^grid power$/i),
+    batteryPower: column(/^battery power$/i),
+    batteryVoltage: column(/^battery voltage$/i),
+    batteryCurrent: column(/^battery current$/i),
+    gridVoltage: column(/^grid voltage$/i),
+    gridFrequency: column(/^grid frequency$/i),
+    temperature: column(/^inv module te?r?m?perature$/i),
+  };
+  if (columns.time < 0) return [];
+
+  const readings: DayReading[] = [];
+  for (const row of table.rows) {
+    const value = (index: number) => (index < 0 ? undefined : toNumber(row[index] ?? ""));
+    const match = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})$/.exec((row[columns.time] ?? "").trim());
+    const at = match ? new Date(`${match[1]}T${match[2]}${timezoneOffset}`) : null;
+    if (!at || Number.isNaN(at.getTime())) continue;
+
+    // Same rule as the live reading: the panels produce at least the larger figure.
+    const pv = value(columns.solar);
+    const pvCharge = value(columns.solarCharge);
+    const solar = pv === undefined && pvCharge === undefined ? undefined : Math.max(pv ?? 0, pvCharge ?? 0);
+    const load = value(columns.load);
+    const grid = value(columns.grid);
+    const surplus = (solar ?? 0) + (grid ?? 0) - (load ?? 0);
+    const sign = surplus < 0 ? -1 : 1;
+    const batteryPower = value(columns.batteryPower);
+    const batteryCurrent = value(columns.batteryCurrent);
+
+    readings.push({
+      timestamp: at.toISOString(),
+      solarPowerW: solar ?? null,
+      loadPowerW: load ?? null,
+      gridPowerW: grid ?? null,
+      batteryPowerW: batteryPower === undefined ? null : sign * Math.abs(batteryPower),
+      batteryVoltageV: value(columns.batteryVoltage) ?? null,
+      batteryCurrentA: batteryCurrent === undefined ? null : sign * Math.abs(batteryCurrent),
+      gridVoltageV: value(columns.gridVoltage) ?? null,
+      gridFrequencyHz: value(columns.gridFrequency) ?? null,
+      temperatureC: value(columns.temperature) ?? null,
+    });
+  }
+  return readings.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
 }

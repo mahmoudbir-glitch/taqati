@@ -16,7 +16,9 @@
     "db:migrate": "pnpm --filter @taqati/database prisma:migrate",
     "db:migrate:deploy": "pnpm --filter @taqati/database prisma:migrate:deploy",
     "db:migrate:diff": "pnpm --filter @taqati/database prisma:migrate:diff",
-    "db:studio": "pnpm --filter @taqati/database prisma:studio"
+    "db:studio": "pnpm --filter @taqati/database prisma:studio",
+    "test": "pnpm -r --if-present test",
+    "sync:smartess": "node apps/web/scripts/sync-smartess.mjs"
   },
   "devDependencies": {
     "typescript": "^5.9.3"

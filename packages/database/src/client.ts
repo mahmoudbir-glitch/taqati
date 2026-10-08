@@ -1,6 +1,9 @@
-import "dotenv/config";
+import { config } from "dotenv";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "./generated/prisma/client";
+
+// Services run from their own package, while the documented `.env` is at the repository root.
+config({ path: [".env", "../../.env"], quiet: true });
 
 const connectionString = process.env.DATABASE_URL;
 

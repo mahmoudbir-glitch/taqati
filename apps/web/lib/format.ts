@@ -31,11 +31,6 @@ export const amps = (value: number) => `${Math.abs(value).toFixed(1)} A`;
 export const volts = (value: number) => `${value.toFixed(1)} V`;
 export const percent = (value: number) => `${Math.round(value)}%`;
 
-export const money = (value: number, currency: string) => {
-  const digits = Math.abs(value) >= 1000 ? 0 : 2;
-  return `${value.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits })} ${currency}`;
-};
-
 export const clockTime = (at: number) => timeFormat.format(at);
 export const dateTime = (at: number) => dateTimeFormat.format(at);
 
@@ -51,15 +46,6 @@ export const relativeTime = (at: number, now: number) => {
   const hours = Math.round(minutes / 60);
   if (Math.abs(hours) < 24) return relativeFormat.format(hours, "hour");
   return relativeFormat.format(Math.round(hours / 24), "day");
-};
-
-export const duration = (hours: number) => {
-  if (!Number.isFinite(hours) || hours < 0) return "—";
-  const totalMinutes = Math.round(hours * 60);
-  const h = Math.floor(totalMinutes / 60);
-  const m = totalMinutes % 60;
-  if (h === 0) return `${m} د`;
-  return m === 0 ? `${h} س` : `${h} س ${m} د`;
 };
 
 export const startOfDay = (at: number) => {
