@@ -2,10 +2,13 @@
   "name": "@taqati/database",
   "version": "0.1.0",
   "private": true,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
   "scripts": {
     "prisma:validate": "prisma validate --config prisma.config.ts",
     "prisma:generate": "prisma generate --config prisma.config.ts",
     "prisma:migrate": "prisma migrate dev --config prisma.config.ts",
+    "prisma:studio": "prisma studio --config prisma.config.ts",
     "build": "prisma generate --config prisma.config.ts",
     "typecheck": "prisma validate --config prisma.config.ts"
   },
