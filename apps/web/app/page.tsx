@@ -159,7 +159,7 @@ export default function HomePage() {
             <path
               key={s.key}
               d={s.d}
-              stroke={s.active ? s.color : "#2a4538"}
+              stroke={s.active ? s.color : "#b6c7d8"}
               strokeWidth={s.active ? 3 : 2}
               strokeDasharray={s.active ? "6 5" : "2 6"}
               fill="none"
@@ -167,11 +167,11 @@ export default function HomePage() {
               {s.active && <animate attributeName="stroke-dashoffset" from="22" to="0" dur="1s" repeatCount="indefinite" />}
             </path>
           ))}
-          <circle cx="200" cy="200" r="34" fill="#0d1b15" stroke="var(--accent)" strokeWidth="2" />
+          <circle cx="200" cy="200" r="34" fill="var(--surface)" stroke="var(--accent)" strokeWidth="2" />
           <text x="200" y="206" textAnchor="middle" fill="var(--accent)" fontSize="13">إنفرتر</text>
           {view.nodes.map((n) => (
             <g key={n.key}>
-              <circle cx={n.x} cy={n.y} r="34" fill="#0d1b15" stroke={n.color} strokeWidth="2.5" />
+              <circle cx={n.x} cy={n.y} r="34" fill="var(--surface)" stroke={n.color} strokeWidth="2.5" />
               <text x={n.x} y={n.y + 8} textAnchor="middle" fontSize="22" fill={n.color}>{n.icon}</text>
               <text x={n.x} y={n.y + (n.key === "battery" ? 58 : n.key === "solar" ? -44 : 56)} textAnchor="middle" fontSize="12" fill="var(--muted)">{n.label}</text>
               <text x={n.x} y={n.y + (n.key === "battery" ? 76 : n.key === "solar" ? -62 : 74)} textAnchor="middle" fontSize="14" fontWeight="700" fill="var(--foreground)">{n.value}</text>
