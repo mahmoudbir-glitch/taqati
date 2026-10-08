@@ -1,0 +1,423 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserStatus { ACTIVE SUSPENDED DELETED }
+enum MembershipRole { OWNER ADMIN TECHNICIAN USER VIEWER }
+enum SiteStatus { ACTIVE INACTIVE ARCHIVED }
+enum GatewayStatus { PENDING ONLINE OFFLINE DISABLED }
+enum CredentialType { TOKEN CERTIFICATE PSK }
+enum InverterStatus { ONLINE OFFLINE FAULT UNKNOWN }
+enum ConnectionProtocol { MODBUS_RTU MODBUS_TCP }
+enum Parity { NONE EVEN ODD }
+enum BatteryType { LITHIUM GEL LEAD_ACID OTHER }
+enum AlertSeverity { INFO WARNING CRITICAL }
+enum AlertStatus { OPEN ACKNOWLEDGED RESOLVED }
+enum CommandStatus { PENDING SENT ACKNOWLEDGED COMPLETED FAILED EXPIRED CANCELLED }
+enum PairingStatus { PENDING USED EXPIRED REVOKED }
+enum Platform { ANDROID IOS WEB }
+enum NotificationType { ALERT SYSTEM DAILY_SUMMARY }
+enum CommandEventType { CREATED AUTHORIZED PUBLISHED RECEIVED_BY_GATEWAY SENT_TO_INVERTER ACK_RECEIVED COMPLETED FAILED }
+
+model User {
+  id              String         @id @default(cuid())
+  email           String         @unique
+  passwordHash    String?
+  firstName       String?
+  lastName        String?
+  phone           String?
+  avatarUrl       String?
+  language        String         @default("ar")
+  timezone        String         @default("Asia/Beirut")
+  currency        String         @default("USD")
+  status          UserStatus     @default(ACTIVE)
+  emailVerifiedAt DateTime?
+  lastLoginAt     DateTime?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  memberships     Membership[]
+  pushDevices     PushDevice[]
+  notifications   Notification[]
+  commands        Command[]      @relation("RequestedCommands")
+  pairingSessions PairingSession[]
+  auditLogs       AuditLog[]
+}
+
+model Organization {
+  id           String       @id @default(cuid())
+  name         String
+  slug         String       @unique
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+  memberships Membership[]
+  sites        Site[]
+  auditLogs    AuditLog[]
+}
+
+model Membership {
+  id             String         @id @default(cuid())
+  organizationId String
+  userId         String
+  role           MembershipRole @default(USER)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([organizationId, userId])
+  @@index([userId])
+}
+
+model Site {
+  id               String            @id @default(cuid())
+  organizationId   String
+  name             String
+  description      String?
+  country          String?
+  city             String?
+  address          String?
+  latitude         Decimal?
+  longitude        Decimal?
+  timezone         String            @default("Asia/Beirut")
+  currency         String            @default("USD")
+  status           SiteStatus        @default(ACTIVE)
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  organization     Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  gateways         Gateway[]
+  inverters        Inverter[]
+  batteries        Battery[]
+  solarArrays      SolarArray[]
+  loads            Load[]
+  telemetryReadings TelemetryReading[]
+  energyDaily      EnergyDaily[]
+  alertRules       AlertRule[]
+  alerts           Alert[]
+  commands         Command[]
+  pairingSessions  PairingSession[]
+  auditLogs        AuditLog[]
+  @@index([organizationId, status])
+}
+
+model Gateway {
+  id               String             @id @default(cuid())
+  siteId           String
+  serialNumber     String             @unique
+  name             String?
+  model            String?
+  hardwareVersion  String?
+  firmwareVersion  String?
+  status            GatewayStatus      @default(PENDING)
+  lastSeenAt        DateTime?
+  lastTelemetryAt  DateTime?
+  lastMqttAt       DateTime?
+  lastInverterReadAt DateTime?
+  lastIp            String?
+  latencyMs        Int?
+  errorCount       Int                @default(0)
+  connectedAt      DateTime?
+  disconnectedAt   DateTime?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+  site             Site               @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  credentials      GatewayCredential[]
+  inverters        Inverter[]
+  telemetryReadings TelemetryReading[]
+  commands         Command[]
+  pairingSessions  PairingSession[]
+  alerts           Alert[]
+  @@index([siteId, lastSeenAt])
+}
+
+model GatewayCredential {
+  id         String         @id @default(cuid())
+  gatewayId  String
+  type       CredentialType
+  secretHash String
+  createdAt  DateTime       @default(now())
+  expiresAt  DateTime?
+  revokedAt  DateTime?
+  lastUsedAt DateTime?
+  gateway    Gateway        @relation(fields: [gatewayId], references: [id], onDelete: Cascade)
+  @@index([gatewayId])
+}
+
+model Inverter {
+  id               String             @id @default(cuid())
+  siteId           String
+  gatewayId        String?
+  name             String
+  manufacturer     String?
+  model            String?
+  serialNumber     String?
+  isPrimary        Boolean            @default(false)
+  isEnabled        Boolean            @default(true)
+  status           InverterStatus     @default(UNKNOWN)
+  lastSeenAt       DateTime?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+  site             Site               @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  gateway          Gateway?           @relation(fields: [gatewayId], references: [id], onDelete: SetNull)
+  connection       InverterConnection?
+  batteries        Battery[]
+  telemetryReadings TelemetryReading[]
+  commands         Command[]
+  alerts           Alert[]
+  @@index([siteId, status])
+  @@index([gatewayId])
+}
+
+model InverterConnection {
+  id             String             @id @default(cuid())
+  inverterId     String             @unique
+  protocol       ConnectionProtocol
+  serialPort     String?
+  baudRate       Int                @default(9600)
+  dataBits       Int                @default(8)
+  parity         Parity             @default(NONE)
+  stopBits       Int                @default(1)
+  slaveId        Int                @default(1)
+  host           String?
+  tcpPort        Int?
+  timeoutMs      Int                @default(1000)
+  pollIntervalMs Int                @default(5000)
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  inverter       Inverter           @relation(fields: [inverterId], references: [id], onDelete: Cascade)
+}
+
+model Battery {
+  id             String       @id @default(cuid())
+  siteId         String
+  inverterId     String?
+  name           String
+  type           BatteryType
+  nominalVoltage Decimal
+  capacityWh    Int
+  minSoc         Int          @default(10)
+  reserveSoc     Int          @default(20)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  site           Site         @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  inverter       Inverter?    @relation(fields: [inverterId], references: [id], onDelete: SetNull)
+  @@index([siteId])
+  @@index([inverterId])
+}
+
+model SolarArray {
+  id              String   @id @default(cuid())
+  siteId          String
+  name            String
+  installedPowerW Int
+  panelCount      Int?
+  orientation     String?
+  tilt            Decimal?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  site            Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  @@index([siteId])
+}
+
+model Load {
+  id             String   @id @default(cuid())
+  siteId         String
+  name           String
+  type           String?
+  ratedPowerW    Int?
+  isControllable Boolean  @default(false)
+  isEnabled      Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  site           Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  @@index([siteId])
+}
+
+model TelemetryReading {
+  id                 BigInt         @id @default(autoincrement())
+  siteId             String
+  gatewayId          String
+  inverterId         String?
+  recordedAt         DateTime
+  solarPowerW        Int?
+  loadPowerW         Int?
+  gridPowerW         Int?
+  batterySoc         Decimal?
+  batteryVoltage     Decimal?
+  batteryCurrent     Decimal?
+  batteryPowerW      Int?
+  inverterTemperature Decimal?
+  gridVoltage        Decimal?
+  gridFrequency      Decimal?
+  inverterStatus     InverterStatus @default(UNKNOWN)
+  rawData            Json?
+  site               Site            @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  gateway            Gateway         @relation(fields: [gatewayId], references: [id], onDelete: Cascade)
+  inverter           Inverter?      @relation(fields: [inverterId], references: [id], onDelete: SetNull)
+  @@index([siteId, recordedAt])
+  @@index([gatewayId, recordedAt])
+  @@index([inverterId, recordedAt])
+}
+
+model EnergyDaily {
+  id                  String   @id @default(cuid())
+  siteId              String
+  date                DateTime @db.Date
+  solarProductionWh   BigInt   @default(0)
+  homeConsumptionWh   BigInt   @default(0)
+  gridImportWh        BigInt   @default(0)
+  gridExportWh        BigInt   @default(0)
+  batteryChargeWh     BigInt   @default(0)
+  batteryDischargeWh  BigInt   @default(0)
+  estimatedSavings    Decimal  @default(0)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  site                Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  @@unique([siteId, date])
+  @@index([siteId, date])
+}
+
+model AlertRule {
+  id              String        @id @default(cuid())
+  siteId          String
+  type            String
+  enabled         Boolean       @default(true)
+  threshold       Decimal?
+  durationSeconds Int?
+  severity        AlertSeverity @default(WARNING)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  site            Site          @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  @@index([siteId, enabled])
+}
+
+model Alert {
+  id            String        @id @default(cuid())
+  siteId        String
+  gatewayId     String?
+  inverterId    String?
+  type          String
+  severity      AlertSeverity
+  status        AlertStatus   @default(OPEN)
+  title         String
+  message       String
+  triggeredAt   DateTime      @default(now())
+  acknowledgedAt DateTime?
+  resolvedAt    DateTime?
+  metadata      Json?
+  site          Site          @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  gateway       Gateway?      @relation(fields: [gatewayId], references: [id], onDelete: SetNull)
+  inverter      Inverter?     @relation(fields: [inverterId], references: [id], onDelete: SetNull)
+  notifications Notification[]
+  @@index([siteId, triggeredAt])
+  @@index([siteId, status])
+  @@index([siteId, severity])
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  siteId    String?
+  alertId   String?
+  type      NotificationType
+  title     String
+  body      String
+  isRead    Boolean          @default(false)
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  alert     Alert?           @relation(fields: [alertId], references: [id], onDelete: SetNull)
+  @@index([userId, createdAt])
+  @@index([userId, isRead])
+}
+
+model PushDevice {
+  id         String   @id @default(cuid())
+  userId     String
+  platform   Platform
+  token      String   @unique
+  appVersion String?
+  deviceModel String?
+  lastSeenAt DateTime?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId])
+}
+
+model Command {
+  id            String        @id @default(cuid())
+  siteId        String
+  gatewayId     String
+  inverterId    String?
+  requestedById String
+  type          String
+  payload       Json
+  status        CommandStatus  @default(PENDING)
+  createdAt     DateTime      @default(now())
+  sentAt        DateTime?
+  acknowledgedAt DateTime?
+  completedAt   DateTime?
+  failureReason String?
+  site          Site          @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  gateway       Gateway       @relation(fields: [gatewayId], references: [id], onDelete: Cascade)
+  inverter      Inverter?     @relation(fields: [inverterId], references: [id], onDelete: SetNull)
+  requestedBy   User          @relation("RequestedCommands", fields: [requestedById], references: [id], onDelete: Restrict)
+  events        CommandEvent[]
+  @@index([siteId, createdAt])
+  @@index([gatewayId, createdAt])
+  @@index([requestedById])
+}
+
+model CommandEvent {
+  id        String           @id @default(cuid())
+  commandId String
+  eventType CommandEventType
+  message   String?
+  metadata  Json?
+  createdAt DateTime         @default(now())
+  command   Command          @relation(fields: [commandId], references: [id], onDelete: Cascade)
+  @@index([commandId, createdAt])
+}
+
+model PairingSession {
+  id          String        @id @default(cuid())
+  siteId      String
+  gatewayId   String
+  tokenHash   String        @unique
+  status      PairingStatus @default(PENDING)
+  createdById String
+  expiresAt   DateTime
+  usedAt      DateTime?
+  createdAt   DateTime      @default(now())
+  site        Site          @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  gateway     Gateway       @relation(fields: [gatewayId], references: [id], onDelete: Cascade)
+  createdBy   User          @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  @@index([gatewayId])
+  @@index([siteId])
+  @@index([expiresAt])
+}
+
+model AuditLog {
+  id             String       @id @default(cuid())
+  organizationId String
+  siteId         String?
+  userId         String?
+  action         String
+  entityType     String
+  entityId       String
+  oldValue       Json?
+  newValue       Json?
+  ipAddress      String?
+  userAgent      String?
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  site           Site?        @relation(fields: [siteId], references: [id], onDelete: SetNull)
+  user           User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+  @@index([organizationId, createdAt])
+  @@index([siteId, createdAt])
+  @@index([userId, createdAt])
+}
