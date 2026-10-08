@@ -3,10 +3,19 @@
   "version": "0.1.0",
   "private": true,
   "packageManager": "pnpm@10.12.4",
+  "engines": {
+    "node": ">=22.18.0"
+  },
   "scripts": {
     "dev": "pnpm --parallel --filter ./apps/* dev",
     "build": "pnpm -r build",
     "lint": "pnpm -r lint",
-    "typecheck": "pnpm -r typecheck"
+    "typecheck": "pnpm -r typecheck",
+    "db:validate": "pnpm --filter @taqati/database prisma:validate",
+    "db:generate": "pnpm --filter @taqati/database prisma:generate",
+    "db:migrate": "pnpm --filter @taqati/database prisma:migrate"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
   }
 }
