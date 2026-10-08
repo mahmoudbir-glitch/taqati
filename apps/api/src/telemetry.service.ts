@@ -1,7 +1,7 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import mqtt, { MqttClient } from "mqtt";
 import { prisma } from "@taqati/database";
-import { isTelemetryMessage, MQTT_TOPICS, TaqatiTelemetryMessage } from "@taqati/shared";
+import { isTelemetryMessage, TaqatiTelemetryMessage } from "@taqati/shared";
 
 @Injectable()
 export class TelemetryService implements OnModuleInit, OnModuleDestroy {
@@ -42,18 +42,24 @@ export class TelemetryService implements OnModuleInit, OnModuleDestroy {
 
   private async handleMessage(topic: string, payload: string) {
     const parts = topic.split("/");
-    if (parts.length !== 6 || parts[0] !== "taqati" || parts[1] !== "v1" || parts[2] !== "sites" || parts[4] !== "gateways") return;
+    if (
+      parts.length !== 7 ||
+      parts[0] !== "taqati" ||
+      parts[1] !== "v1" ||
+      parts[2] !== "sites" ||
+      parts[4] !== "gateways"
+    ) return;
 
     const siteId = parts[3];
     const gatewayId = parts[5];
     if (!siteId || !gatewayId) return;
 
-    if (topic.endsWith("/status")) {
+    if (parts[6] === "status") {
       await this.handleStatus(siteId, gatewayId, payload);
       return;
     }
 
-    if (topic.endsWith("/telemetry")) {
+    if (parts[6] === "telemetry") {
       await this.handleTelemetry(siteId, gatewayId, payload);
     }
   }
