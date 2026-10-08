@@ -5,12 +5,13 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
-    "prisma:validate": "prisma validate --config prisma.config.ts",
-    "prisma:generate": "prisma generate --config prisma.config.ts",
-    "prisma:migrate": "prisma migrate dev --config prisma.config.ts",
-    "prisma:studio": "prisma studio --config prisma.config.ts",
-    "build": "prisma generate --config prisma.config.ts && tsc -p tsconfig.json",
-    "typecheck": "prisma validate --config prisma.config.ts"
+    "normalize": "node scripts/normalize-schema.mjs",
+    "prisma:validate": "pnpm normalize && prisma validate --config prisma.config.ts",
+    "prisma:generate": "pnpm normalize && prisma generate --config prisma.config.ts",
+    "prisma:migrate": "pnpm normalize && prisma migrate dev --config prisma.config.ts",
+    "prisma:studio": "pnpm normalize && prisma studio --config prisma.config.ts",
+    "build": "pnpm normalize && prisma generate --config prisma.config.ts && tsc -p tsconfig.json",
+    "typecheck": "pnpm normalize && prisma validate --config prisma.config.ts"
   },
   "dependencies": {
     "@prisma/client": "^7.10.0",
@@ -20,7 +21,6 @@
   "devDependencies": {
     "prisma": "^7.10.0",
     "dotenv": "^17.2.2",
-    "@types/pg": "^8.15.5",
-    "typescript": "^5.9.3"
+    "@types/pg": "^8.15.5"
   }
 }
