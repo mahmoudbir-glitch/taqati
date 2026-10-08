@@ -167,9 +167,30 @@ export interface MapOptions {
   now?: Date;
 }
 
-/** `gts` looks like "2026-10-08 11:50:00" in the device/site timezone. */
+const SERVER_OFFSET_MS = 8 * 3_600_000;
+const MAX_CLOCK_SKEW_MS = 15 * 60_000;
+
+/**
+ * `gts` is the time of the reading, either "2026-10-08 11:50:00" in the
+ * device/site timezone or an epoch number (ms or s).
+ *
+ * The epoch form is not a true instant: observed on the live service, it is the
+ * device's local wall-clock time encoded as if it were UTC+8 (the server's own
+ * zone), so a 15:04 reading in UTC+3 arrives as 07:04Z. It is shifted back to the
+ * device zone here; if that lands in the future the raw value is used instead.
+ */
 export function parseGts(gts: string | undefined, timezoneOffset: string, fallback: Date): Date {
   if (!gts) return fallback;
+  if (/^\d{10,13}$/.test(gts.trim())) {
+    const raw = Number(gts.trim());
+    const epoch = raw < 1e11 ? raw * 1000 : raw;
+    const zone = /^([+-])(\d{2}):(\d{2})$/.exec(timezoneOffset);
+    const zoneMs = zone ? (zone[1] === "-" ? -1 : 1) * (Number(zone[2]) * 60 + Number(zone[3])) * 60_000 : 0;
+    const latest = fallback.getTime() + MAX_CLOCK_SKEW_MS;
+    const candidates = [epoch + SERVER_OFFSET_MS - zoneMs, epoch];
+    const chosen = candidates.find((candidate) => candidate <= latest);
+    return chosen === undefined ? fallback : new Date(chosen);
+  }
   const match = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})$/.exec(gts.trim());
   if (!match) return fallback;
   const parsed = new Date(`${match[1]}T${match[2]}${timezoneOffset}`);

@@ -1,9 +1,9 @@
 "use client";
 
-import { CalendarX, PiggyBank, SunMedium, UtilityPole, Zap } from "lucide-react";
+import { BatteryMedium, CalendarX, SunMedium, UtilityPole, Zap } from "lucide-react";
 import { useState } from "react";
-import { savings, selfSufficiency, sumTotals } from "../../lib/energy";
-import { dayLabel, kw, kwh, money, percent, shortDayLabel, startOfDay } from "../../lib/format";
+import { selfSufficiency, sumTotals } from "../../lib/energy";
+import { dayLabel, kw, kwh, percent, shortDayLabel, startOfDay } from "../../lib/format";
 import type { EnergyTotals } from "../../lib/types";
 import { BarChart, TimeChart } from "../charts";
 import { useTelemetry } from "../telemetry-provider";
@@ -22,7 +22,7 @@ const PERIOD_DAYS: Record<Exclude<Period, "today">, number> = { week: 7, month: 
 const kwTick = (watts: number) => String(Number((watts / 1000).toFixed(2)));
 const kwhTick = (wh: number) => String(Number((wh / 1000).toFixed(1)));
 
-function Totals({ totals, tariff, currency }: { totals: EnergyTotals; tariff: number; currency: string }) {
+function Totals({ totals }: { totals: EnergyTotals }) {
   const sufficiency = selfSufficiency(totals);
   return (
     <>
@@ -30,7 +30,7 @@ function Totals({ totals, tariff, currency }: { totals: EnergyTotals; tariff: nu
         <StatTile label="الإنتاج الشمسي" value={kwh(totals.solarWh)} icon={SunMedium} color="var(--solar)" />
         <StatTile label="الاستهلاك" value={kwh(totals.loadWh)} icon={Zap} color="var(--home)" />
         <StatTile label="من الشبكة" value={kwh(totals.gridImportWh)} icon={UtilityPole} color="var(--grid)" />
-        <StatTile label="التوفير التقديري" value={money(savings(totals, tariff), currency)} icon={PiggyBank} color="var(--accent)" />
+        <StatTile label="من البطارية" value={kwh(totals.batteryDischargeWh)} icon={BatteryMedium} color="var(--battery)" />
       </div>
       <section className="card">
         <div className="card-head">
@@ -50,7 +50,7 @@ function Totals({ totals, tariff, currency }: { totals: EnergyTotals; tariff: nu
 }
 
 export function EnergyView() {
-  const { today, todayTotals, daily, settings, now } = useTelemetry();
+  const { today, todayTotals, daily, now } = useTelemetry();
   const [period, setPeriod] = useState<Period>("today");
 
   return (
@@ -64,7 +64,7 @@ export function EnergyView() {
             const dayStart = startOfDay(now);
             return (
               <>
-                <Totals totals={todayTotals} tariff={settings.tariff} currency={settings.currency} />
+                <Totals totals={todayTotals} />
                 <section className="card">
                   <div className="card-head">
                     <div>
@@ -110,7 +110,7 @@ export function EnergyView() {
           const days = daily.slice(-PERIOD_DAYS[period]);
           return (
             <>
-              <Totals totals={sumTotals(days)} tariff={settings.tariff} currency={settings.currency} />
+              <Totals totals={sumTotals(days)} />
               <section className="card">
                 <div className="card-head">
                   <div>

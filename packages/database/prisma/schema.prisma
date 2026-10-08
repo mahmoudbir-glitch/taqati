@@ -178,6 +178,7 @@ model Site {
   commands         Command[]
   pairingSessions  PairingSession[]
   auditLogs        AuditLog[]
+  smartessConnection SmartessConnection?
   @@index([organizationId, status])
 }
 
@@ -209,6 +210,24 @@ model Gateway {
   pairingSessions  PairingSession[]
   alerts           Alert[]
   @@index([siteId, lastSeenAt])
+}
+
+// SmartESS / DessMonitor cloud account a site is polled from. `passwordCipher` is
+// the AES-GCM encrypted SHA-1 of the account password; it is never returned by the API.
+model SmartessConnection {
+  id             String   @id @default(cuid())
+  siteId         String   @unique
+  enabled        Boolean  @default(true)
+  username       String
+  passwordCipher String
+  devicePn       String
+  deviceSn       String
+  // Address of the device behind the datalogger, as listed by the SmartESS account.
+  deviceCode     Int?
+  deviceAddr     Int?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  site           Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
 }
 
 model GatewayCredential {

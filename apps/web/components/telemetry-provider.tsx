@@ -5,16 +5,8 @@ import { apiConfig, fetchDaily, fetchReadings, fetchSeries } from "../lib/api";
 import { demoDaily, demoToday } from "../lib/demo";
 import { deriveAlerts, deriveEvents, integrate } from "../lib/energy";
 import { dayKey, startOfDay } from "../lib/format";
-import {
-  ACKED_ALERTS_KEY,
-  applyTheme,
-  defaultSettings,
-  readStored,
-  sanitizeSettings,
-  SETTINGS_KEY,
-  writeStored,
-} from "../lib/settings";
-import type { DailyEnergy, DataMode, EnergyTotals, Reading, Settings, SystemAlert, SystemEvent } from "../lib/types";
+import { ACKED_ALERTS_KEY, readStored, writeStored } from "../lib/storage";
+import type { DailyEnergy, DataMode, EnergyTotals, Reading, SystemAlert, SystemEvent } from "../lib/types";
 
 const TICK_MS = 5000;
 const HISTORY_REFRESH_MS = 5 * 60_000;
@@ -37,9 +29,6 @@ type TelemetryContextValue = {
   /** Number of unacknowledged warnings and critical alerts. */
   attentionCount: number;
   acknowledge: (id: string) => void;
-  settings: Settings;
-  saveSettings: (settings: Settings) => void;
-  resetSettings: () => void;
 };
 
 const TelemetryContext = createContext<TelemetryContextValue | null>(null);
@@ -55,7 +44,6 @@ type AckState = { day: string; ids: string[] };
 export function TelemetryProvider({ children }: { children: ReactNode }) {
   // Time-dependent values are set after mount so server and client render the same HTML.
   const [now, setNow] = useState(0);
-  const [settings, setSettings] = useState<Settings>(defaultSettings);
   const [acked, setAcked] = useState<AckState>({ day: "", ids: [] });
   const [liveSeries, setLiveSeries] = useState<Reading[]>([]);
   const [liveLatest, setLiveLatest] = useState<Reading | null>(null);
@@ -64,16 +52,11 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
-    setSettings(sanitizeSettings(readStored<unknown>(SETTINGS_KEY, null)));
     setAcked(readStored<AckState>(ACKED_ALERTS_KEY, { day: "", ids: [] }));
     setNow(Date.now());
     const timer = window.setInterval(() => setNow(Date.now()), TICK_MS);
     return () => window.clearInterval(timer);
   }, []);
-
-  useEffect(() => {
-    applyTheme(settings.theme);
-  }, [settings.theme]);
 
   useEffect(() => {
     if (!apiConfig.configured) return;
@@ -137,26 +120,26 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
 
   const today = useMemo(() => {
     if (now === 0) return [];
-    if (!apiConfig.configured) return demoToday(now, settings);
+    if (!apiConfig.configured) return demoToday(now);
     // Today's curve is the bucketed series, extended by the newest raw reading.
     const series = liveSeries.filter((reading) => reading.at >= dayStart);
     const last = series[series.length - 1];
     return liveLatest && liveLatest.at >= dayStart && (!last || liveLatest.at > last.at) ? [...series, liveLatest] : series;
-  }, [now, dayStart, settings, liveSeries, liveLatest]);
+  }, [now, dayStart, liveSeries, liveLatest]);
 
   const daily = useMemo(() => {
     if (apiConfig.configured) return liveDaily;
-    return dailySlot > 0 ? demoDaily(DAILY_DAYS, dailySlot * HISTORY_REFRESH_MS, settings) : null;
-  }, [dailySlot, settings, liveDaily]);
+    return dailySlot > 0 ? demoDaily(DAILY_DAYS, dailySlot * HISTORY_REFRESH_MS) : null;
+  }, [dailySlot, liveDaily]);
 
   const latest = apiConfig.configured ? liveLatest : (today[today.length - 1] ?? null);
 
   const todayTotals = useMemo(() => integrate(today), [today]);
   const alerts = useMemo(
-    () => (latest && now > 0 ? deriveAlerts(latest, settings, now, apiConfig.configured) : []),
-    [latest, settings, now],
+    () => (latest && now > 0 ? deriveAlerts(latest, now, apiConfig.configured) : []),
+    [latest, now],
   );
-  const events = useMemo(() => deriveEvents(today, settings), [today, settings]);
+  const events = useMemo(() => deriveEvents(today), [today]);
 
   // Acknowledgements last for the day they were made.
   const todayKey = now > 0 ? dayKey(now) : "";
@@ -175,17 +158,6 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
     [todayKey],
   );
 
-  const saveSettings = useCallback((next: Settings) => {
-    const clean = sanitizeSettings(next);
-    setSettings(clean);
-    writeStored(SETTINGS_KEY, clean);
-  }, []);
-
-  const resetSettings = useCallback(() => {
-    setSettings(defaultSettings);
-    writeStored(SETTINGS_KEY, defaultSettings);
-  }, []);
-
   const value = useMemo<TelemetryContextValue>(
     () => ({
       ready,
@@ -200,11 +172,8 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
       ackedIds,
       attentionCount,
       acknowledge,
-      settings,
-      saveSettings,
-      resetSettings,
     }),
-    [ready, mode, now, today, latest, todayTotals, daily, alerts, events, ackedIds, attentionCount, acknowledge, settings, saveSettings, resetSettings],
+    [ready, mode, now, today, latest, todayTotals, daily, alerts, events, ackedIds, attentionCount, acknowledge],
   );
 
   return <TelemetryContext.Provider value={value}>{children}</TelemetryContext.Provider>;

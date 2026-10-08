@@ -26,7 +26,8 @@ export interface SmartessConfig {
   passwordSha1: string;
   companyKey: string;
   source: string;
-  device: SmartessDevice;
+  /** Not needed to log in or to list the account's devices. */
+  device?: SmartessDevice;
 }
 
 export interface SmartessPar {
@@ -126,8 +127,29 @@ export class SmartessClient {
     }
   }
 
+  /**
+   * Devices on the account. Energy-storage inverters are listed by
+   * webQueryDeviceEs; other device types only by the general listings.
+   */
+  async listDevices(): Promise<SmartessDevice[]> {
+    const found = new Map<string, SmartessDevice>();
+    let lastError: unknown;
+    for (const action of ["webQueryDeviceEs", "webQueryDevice", "queryDevices"]) {
+      try {
+        collectDevices(await this.call(action, [["page", "0"], ["pagesize", "50"]]), found);
+      } catch (error) {
+        lastError = error;
+      }
+      if (found.size > 0) break;
+    }
+    // "No such device" answers mean an empty account; anything else is a real failure.
+    if (found.size === 0 && lastError && !/NOT_FOUND|NO_RECORD/i.test(String(lastError))) throw lastError;
+    return [...found.values()];
+  }
+
   private async readAll(isComplete?: (pars: SmartessPar[]) => boolean): Promise<SmartessLastData> {
     const { device, source } = this.config;
+    if (!device) throw new Error("SmartESS device is not configured");
     const params: Array<[string, string]> = [
       ["source", source],
       ["devcode", String(device.devcode)],
@@ -160,19 +182,31 @@ export class SmartessClient {
 
   private async authenticate(): Promise<Session> {
     const actions = this.config.authAction ? [this.config.authAction] : ["authSource", "auth"];
-    let lastError: unknown;
-    for (const action of actions) {
-      try {
-        return await this.login(action);
-      } catch (error) {
-        lastError = error;
+    // SmartESS user names are case-sensitive and phone keyboards change the case
+    // silently, so an unknown user is retried in the other common spellings.
+    const typed = this.config.username.trim();
+    const spellings = [...new Set([typed, typed.charAt(0).toUpperCase() + typed.slice(1), typed.toLowerCase(), typed.toUpperCase()])];
+    const unknownUser = (error: unknown) => /NOT_FOUND_USR/i.test(String(error));
+    let firstError: unknown;
+    for (const username of spellings) {
+      let informative: unknown;
+      for (const action of actions) {
+        try {
+          return await this.login(action, username);
+        } catch (error) {
+          firstError ??= error;
+          if (!unknownUser(error)) informative ??= error;
+        }
       }
+      // Any other answer (wrong password, network) is about a user that exists,
+      // so it is the one worth reporting and another spelling would not help.
+      if (informative) throw informative;
     }
-    throw lastError;
+    throw firstError;
   }
 
-  private async login(authAction: string): Promise<Session> {
-    const { baseUrl, username, passwordSha1, companyKey, source } = this.config;
+  private async login(authAction: string, username: string): Promise<Session> {
+    const { baseUrl, passwordSha1, companyKey, source } = this.config;
     const salt = String(Date.now());
     const action = buildAction(authAction, [
       ["usr", username],
@@ -226,6 +260,23 @@ export class SmartessClient {
   }
 }
 
+/** Finds every object in a listing that looks like a device (has pn, sn and devcode). */
+function collectDevices(node: unknown, out: Map<string, SmartessDevice>, depth = 0) {
+  if (!node || typeof node !== "object" || depth > 6) return;
+  if (Array.isArray(node)) {
+    for (const child of node) collectDevices(child, out, depth + 1);
+    return;
+  }
+  const item = node as Record<string, unknown>;
+  const devcode = Number(item.devcode);
+  const devaddr = Number(item.devaddr);
+  if (typeof item.sn === "string" && item.sn && typeof item.pn === "string" && item.pn && Number.isFinite(devcode) && Number.isFinite(devaddr)) {
+    out.set(item.sn, { pn: item.pn.trim(), sn: item.sn.trim(), devcode, devaddr });
+    return;
+  }
+  for (const child of Object.values(item)) collectDevices(child, out, depth + 1);
+}
+
 /**
  * Collects every {par, val, unit} entry found anywhere in the payload. The
  * nesting differs between actions and device families, so walk it generically.
@@ -258,5 +309,5 @@ export function parseLastData(dat: unknown): SmartessLastData {
   visit(dat, 0);
 
   const gts = dat && typeof dat === "object" ? (dat as { gts?: unknown }).gts : undefined;
-  return { gts: typeof gts === "string" ? gts : undefined, pars };
+  return { gts: typeof gts === "string" ? gts : typeof gts === "number" ? String(gts) : undefined, pars };
 }

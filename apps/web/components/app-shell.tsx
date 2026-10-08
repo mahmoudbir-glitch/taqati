@@ -45,7 +45,7 @@ function Brand({ subtitle }: { subtitle: string }) {
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
-  const { mode, ready, attentionCount, settings } = useTelemetry();
+  const { mode, ready, attentionCount } = useTelemetry();
 
   const badge = (href: string) =>
     href === "/alerts" && attentionCount > 0 ? (
@@ -71,7 +71,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       <div className="main">
         <header className="topbar">
           <div className="container topbar-inner">
-            <Brand subtitle={settings.siteName} />
+            <Brand subtitle="TAQATI" />
             <span className="topbar-spacer" />
             {ready && (
               <span className="mode-badge" data-mode={mode}>

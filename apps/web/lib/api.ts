@@ -88,7 +88,66 @@ export async function fetchDaily(days: number): Promise<DailyEnergy[]> {
     .sort((a, b) => a.date.localeCompare(b.date));
 }
 
-export async function checkHealth(): Promise<boolean> {
-  const body = (await getJson("/api/health")) as { status?: string } | null;
-  return body?.status === "ok";
+export type SmartessStatus = {
+  source: "database" | "environment" | "none";
+  enabled: boolean;
+  /** Masked by the server. */
+  username: string | null;
+  devicePn: string | null;
+  deviceSn: string | null;
+  polling: boolean;
+  lastPollAt: string | null;
+  lastSuccessAt: string | null;
+  lastError: string | null;
+  canEdit: boolean;
+};
+
+export type SmartessAccount = {
+  username: string;
+  /** Empty keeps the password already stored on the server. */
+  password: string;
+  devicePn: string;
+  deviceSn: string;
+  enabled: boolean;
+};
+
+export type SmartessTestResult =
+  | { ok: true; deviceSn: string; timestamp: string; solarPowerW: number | null; loadPowerW: number | null; batterySoc: number | null }
+  | { ok: false; error: string };
+
+export class ApiError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+  }
 }
+
+const smartessPath = () => `/api/sites/${encodeURIComponent(siteId)}/smartess`;
+
+/** Calls an admin endpoint; `token` is the server's ADMIN_TOKEN and is never stored. */
+async function adminRequest(method: "PUT" | "POST" | "DELETE", path: string, token: string, body?: unknown): Promise<unknown> {
+  const response = await fetch(`${apiBase}${path}`, {
+    method,
+    cache: "no-store",
+    headers: { Authorization: `Bearer ${token}`, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const data: unknown = await response.json().catch(() => null);
+  if (!response.ok) {
+    const detail = (data as { message?: unknown } | null)?.message;
+    throw new ApiError(response.status, Array.isArray(detail) ? detail.join(", ") : typeof detail === "string" ? detail : "request failed");
+  }
+  return data;
+}
+
+export const fetchSmartessStatus = async () => (await getJson(smartessPath())) as SmartessStatus;
+
+export const saveSmartess = async (token: string, account: SmartessAccount) =>
+  (await adminRequest("PUT", smartessPath(), token, account)) as SmartessStatus;
+
+export const testSmartess = async (token: string, account: SmartessAccount) =>
+  (await adminRequest("POST", `${smartessPath()}/test`, token, account)) as SmartessTestResult;
+
+export const removeSmartess = async (token: string) => (await adminRequest("DELETE", smartessPath(), token)) as SmartessStatus;

@@ -1,6 +1,7 @@
 import "./env";
 import { Controller, Get, Module } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
+import { SmartessController } from "./smartess/smartess.controller";
 import { SmartessPoller } from "./smartess/smartess.poller";
 import { TelemetryController } from "./telemetry.controller";
 import { TelemetryService } from "./telemetry.service";
@@ -18,7 +19,7 @@ class HealthController {
 }
 
 @Module({
-  controllers: [HealthController, TelemetryController],
+  controllers: [HealthController, TelemetryController, SmartessController],
   providers: [TelemetryService, SmartessPoller],
 })
 class AppModule {}

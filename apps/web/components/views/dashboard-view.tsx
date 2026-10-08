@@ -1,22 +1,22 @@
 "use client";
 
-import { BatteryMedium, ChevronLeft, CircleCheck, House, PiggyBank, ShieldCheck, Sun, SunMedium, UtilityPole, Zap } from "lucide-react";
+import { BatteryMedium, ChevronLeft, CircleCheck, House, ShieldCheck, Sun, SunMedium, UtilityPole, Zap } from "lucide-react";
 import Link from "next/link";
-import { batteryState, batteryStateLabel, operatingMode, savings, selfSufficiency } from "../../lib/energy";
-import { dateTime, kw, kwh, money, percent, power, relativeTime, startOfDay, THRESHOLD_W } from "../../lib/format";
+import { batteryState, batteryStateLabel, operatingMode, selfSufficiency } from "../../lib/energy";
+import { dateTime, kw, kwh, percent, power, relativeTime, startOfDay, THRESHOLD_W } from "../../lib/format";
 import { TimeChart } from "../charts";
 import { EnergyFlow } from "../energy-flow";
 import { useTelemetry } from "../telemetry-provider";
-import { DataGate, Legend, Ltr, PageHeader, SEVERITY_ICON, SeverityBadge, StatTile } from "../ui";
+import { DataGate, Legend, PageHeader, SEVERITY_ICON, SeverityBadge, StatTile } from "../ui";
 
 const kwTick = (watts: number) => String(Number((watts / 1000).toFixed(2)));
 
 export function DashboardView() {
-  const { today, todayTotals, alerts, ackedIds, settings, now, mode } = useTelemetry();
+  const { today, todayTotals, alerts, ackedIds, now, mode } = useTelemetry();
 
   return (
     <main className="page">
-      <PageHeader title="منظومتك تحت السيطرة" subtitle={settings.siteName} />
+      <PageHeader title="منظومتك تحت السيطرة" />
       <DataGate>
         {(latest) => {
           const online = latest.status === "ONLINE";
@@ -110,13 +110,7 @@ export function DashboardView() {
                     icon={ShieldCheck}
                     color="var(--accent)"
                   />
-                  <StatTile
-                    label="توفير اليوم"
-                    value={money(savings(todayTotals, settings.tariff), settings.currency)}
-                    hint={<>بتعرفة <Ltr>{settings.tariff}</Ltr> لكل kWh</>}
-                    icon={PiggyBank}
-                    color="var(--accent)"
-                  />
+                  <StatTile label="من الشبكة اليوم" value={kwh(todayTotals.gridImportWh)} icon={UtilityPole} color="var(--grid)" />
                 </div>
               </section>
 

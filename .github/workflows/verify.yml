@@ -40,4 +40,5 @@ jobs:
       - run: test -s packages/database/prisma/migrations/0_init/migration.sql
       - run: pnpm --filter @taqati/database exec prisma db push --config prisma.config.ts --accept-data-loss
       - run: pnpm typecheck
+      - run: pnpm test
       - run: pnpm build
