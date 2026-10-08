@@ -5,17 +5,23 @@ import { useEffect, useMemo, useState } from "react";
 type Telemetry = {
   id: string;
   recordedAt: string;
-  solarPowerW: number | null;
-  loadPowerW: number | null;
-  gridPowerW: number | null;
-  batterySoc: number | null;
-  batteryPowerW: number | null;
+  solarPowerW: number | string | null;
+  loadPowerW: number | string | null;
+  gridPowerW: number | string | null;
+  batterySoc: number | string | null;
+  batteryPowerW: number | string | null;
   inverterStatus: string;
+};
+
+// Prisma Decimal columns are serialized as strings by the API.
+const num = (value: number | string | null | undefined) => {
+  const parsed = Number(value ?? 0);
+  return Number.isFinite(parsed) ? parsed : 0;
 };
 
 const demo: Telemetry = {
   id: "demo",
-  recordedAt: new Date().toISOString(),
+  recordedAt: "",
   solarPowerW: 4820,
   loadPowerW: 2310,
   gridPowerW: 0,
@@ -58,11 +64,19 @@ export default function HomePage() {
   }, [apiBase, siteId]);
 
   const stats = useMemo(() => [
-    ["الطاقة الشمسية", `${((latest.solarPowerW ?? 0) / 1000).toFixed(2)} kW`, "إنتاج الآن"],
-    ["البطارية", `${Math.round(latest.batterySoc ?? 0)}%`, "حالة الشحن"],
-    ["استهلاك المنزل", `${((latest.loadPowerW ?? 0) / 1000).toFixed(2)} kW`, "حمل حالي"],
-    ["الشبكة", `${Math.round(latest.gridPowerW ?? 0)} W`, "استيراد / تصدير"],
+    ["الطاقة الشمسية", `${(num(latest.solarPowerW) / 1000).toFixed(2)} kW`, "إنتاج الآن"],
+    ["البطارية", `${Math.round(num(latest.batterySoc))}%`, "حالة الشحن"],
+    ["استهلاك المنزل", `${(num(latest.loadPowerW) / 1000).toFixed(2)} kW`, "حمل حالي"],
+    ["الشبكة", `${Math.round(num(latest.gridPowerW))} W`, "استيراد / تصدير"],
   ] as const, [latest]);
+
+  // Formatted after mount so server and client render the same initial HTML
+  // (locale/timezone differ between the build server and the browser).
+  const [lastRead, setLastRead] = useState("—");
+  useEffect(() => {
+    const date = latest.recordedAt ? new Date(latest.recordedAt) : null;
+    setLastRead(date && !Number.isNaN(date.getTime()) ? date.toLocaleString("ar-LB") : "بيانات تجريبية");
+  }, [latest.recordedAt]);
 
   return (
     <main className="container" style={{ paddingBlock: 28 }}>
@@ -100,7 +114,7 @@ export default function HomePage() {
 
       <section className="card" style={{ marginTop: 16 }}>
         <p style={{ color: "var(--muted)", marginTop: 0 }}>آخر قراءة</p>
-        <strong>{new Date(latest.recordedAt).toLocaleString("ar-LB")}</strong>
+        <strong>{lastRead}</strong>
       </section>
     </main>
   );

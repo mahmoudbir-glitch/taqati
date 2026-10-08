@@ -7,22 +7,100 @@ datasource db {
   provider = "postgresql"
 }
 
-enum UserStatus { ACTIVE SUSPENDED DELETED }
-enum MembershipRole { OWNER ADMIN TECHNICIAN USER VIEWER }
-enum SiteStatus { ACTIVE INACTIVE ARCHIVED }
-enum GatewayStatus { PENDING ONLINE OFFLINE DISABLED }
-enum CredentialType { TOKEN CERTIFICATE PSK }
-enum InverterStatus { ONLINE OFFLINE FAULT UNKNOWN }
-enum ConnectionProtocol { MODBUS_RTU MODBUS_TCP }
-enum Parity { NONE EVEN ODD }
-enum BatteryType { LITHIUM GEL LEAD_ACID OTHER }
-enum AlertSeverity { INFO WARNING CRITICAL }
-enum AlertStatus { OPEN ACKNOWLEDGED RESOLVED }
-enum CommandStatus { PENDING SENT ACKNOWLEDGED COMPLETED FAILED EXPIRED CANCELLED }
-enum PairingStatus { PENDING USED EXPIRED REVOKED }
-enum Platform { ANDROID IOS WEB }
-enum NotificationType { ALERT SYSTEM DAILY_SUMMARY }
-enum CommandEventType { CREATED AUTHORIZED PUBLISHED RECEIVED_BY_GATEWAY SENT_TO_INVERTER ACK_RECEIVED COMPLETED FAILED }
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  DELETED
+}
+enum MembershipRole {
+  OWNER
+  ADMIN
+  TECHNICIAN
+  USER
+  VIEWER
+}
+enum SiteStatus {
+  ACTIVE
+  INACTIVE
+  ARCHIVED
+}
+enum GatewayStatus {
+  PENDING
+  ONLINE
+  OFFLINE
+  DISABLED
+}
+enum CredentialType {
+  TOKEN
+  CERTIFICATE
+  PSK
+}
+enum InverterStatus {
+  ONLINE
+  OFFLINE
+  FAULT
+  UNKNOWN
+}
+enum ConnectionProtocol {
+  MODBUS_RTU
+  MODBUS_TCP
+}
+enum Parity {
+  NONE
+  EVEN
+  ODD
+}
+enum BatteryType {
+  LITHIUM
+  GEL
+  LEAD_ACID
+  OTHER
+}
+enum AlertSeverity {
+  INFO
+  WARNING
+  CRITICAL
+}
+enum AlertStatus {
+  OPEN
+  ACKNOWLEDGED
+  RESOLVED
+}
+enum CommandStatus {
+  PENDING
+  SENT
+  ACKNOWLEDGED
+  COMPLETED
+  FAILED
+  EXPIRED
+  CANCELLED
+}
+enum PairingStatus {
+  PENDING
+  USED
+  EXPIRED
+  REVOKED
+}
+enum Platform {
+  ANDROID
+  IOS
+  WEB
+}
+enum NotificationType {
+  ALERT
+  SYSTEM
+  DAILY_SUMMARY
+}
+enum CommandEventType {
+  CREATED
+  AUTHORIZED
+  PUBLISHED
+  RECEIVED_BY_GATEWAY
+  SENT_TO_INVERTER
+  ACK_RECEIVED
+  COMPLETED
+  FAILED
+}
 
 model User {
   id              String         @id @default(cuid())
