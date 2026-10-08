@@ -14,6 +14,8 @@
     "db:validate": "pnpm --filter @taqati/database prisma:validate",
     "db:generate": "pnpm --filter @taqati/database prisma:generate",
     "db:migrate": "pnpm --filter @taqati/database prisma:migrate",
+    "db:migrate:deploy": "pnpm --filter @taqati/database prisma:migrate:deploy",
+    "db:migrate:diff": "pnpm --filter @taqati/database prisma:migrate:diff",
     "db:studio": "pnpm --filter @taqati/database prisma:studio"
   },
   "devDependencies": {
