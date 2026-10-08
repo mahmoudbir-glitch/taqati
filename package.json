@@ -9,11 +9,12 @@
   "scripts": {
     "dev": "pnpm --parallel --filter ./apps/* dev",
     "build": "pnpm -r build",
-    "lint": "pnpm -r lint",
-    "typecheck": "pnpm -r typecheck",
+    "lint": "pnpm db:generate && pnpm -r lint",
+    "typecheck": "pnpm db:generate && pnpm -r typecheck",
     "db:validate": "pnpm --filter @taqati/database prisma:validate",
     "db:generate": "pnpm --filter @taqati/database prisma:generate",
-    "db:migrate": "pnpm --filter @taqati/database prisma:migrate"
+    "db:migrate": "pnpm --filter @taqati/database prisma:migrate",
+    "db:studio": "pnpm --filter @taqati/database prisma:studio"
   },
   "devDependencies": {
     "typescript": "^5.9.3"
