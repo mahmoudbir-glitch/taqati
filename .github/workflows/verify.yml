@@ -10,6 +10,21 @@ jobs:
     runs-on: ubuntu-latest
     env:
       DATABASE_URL: postgresql://taqati:taqati@localhost:5432/taqati?schema=public
+      MQTT_URL: mqtt://localhost:1883
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: taqati
+          POSTGRES_PASSWORD: taqati
+          POSTGRES_DB: taqati
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U taqati -d taqati"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -21,5 +36,6 @@ jobs:
           cache: pnpm
       - run: pnpm install --no-frozen-lockfile
       - run: pnpm db:validate
+      - run: pnpm --filter @taqati/database exec prisma db push --config prisma.config.ts --accept-data-loss
       - run: pnpm typecheck
       - run: pnpm build
