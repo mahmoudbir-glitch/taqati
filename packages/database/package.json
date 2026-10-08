@@ -9,6 +9,8 @@
     "prisma:validate": "pnpm normalize && prisma validate --config prisma.config.ts",
     "prisma:generate": "pnpm normalize && prisma generate --config prisma.config.ts",
     "prisma:migrate": "pnpm normalize && prisma migrate dev --config prisma.config.ts",
+    "prisma:migrate:deploy": "pnpm normalize && prisma migrate deploy --config prisma.config.ts",
+    "prisma:migrate:diff": "pnpm normalize && mkdir -p prisma/migrations/0_init && prisma migrate diff --from-empty --to-schema prisma/schema.prisma --script --config prisma.config.ts > prisma/migrations/0_init/migration.sql",
     "prisma:studio": "pnpm normalize && prisma studio --config prisma.config.ts",
     "build": "pnpm normalize && prisma generate --config prisma.config.ts && tsc -p tsconfig.json",
     "typecheck": "pnpm normalize && prisma validate --config prisma.config.ts"
@@ -21,7 +23,6 @@
   "devDependencies": {
     "prisma": "^7.10.0",
     "dotenv": "^17.2.2",
-    "@types/pg": "^8.15.5",
-    "typescript": "^5.9.3"
+    "@types/pg": "^8.15.5"
   }
 }
