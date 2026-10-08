@@ -119,7 +119,7 @@ export class TelemetryService implements OnModuleInit, OnModuleDestroy {
           gridVoltage: numberOrNull(data.inverter.gridVoltageV),
           gridFrequency: numberOrNull(data.inverter.gridFrequencyHz),
           inverterStatus: mapInverterStatus(data.inverter.status),
-          rawData: data,
+          rawData: JSON.parse(JSON.stringify(data)),
         },
       }),
       prisma.gateway.updateMany({
