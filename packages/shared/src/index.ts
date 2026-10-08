@@ -25,3 +25,5 @@ export interface TelemetryReading {
 
 export const telemetryTopic = (siteId: string, gatewayId: string) =>
   `taqati/v1/sites/${siteId}/gateways/${gatewayId}/telemetry`;
+
+export * from "./telemetry";
