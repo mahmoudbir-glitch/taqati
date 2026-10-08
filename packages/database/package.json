@@ -1,0 +1,22 @@
+{
+  "name": "@taqati/database",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "prisma:validate": "prisma@7 validate --config prisma.config.ts",
+    "prisma:generate": "prisma@7 generate --config prisma.config.ts",
+    "prisma:migrate": "prisma@7 migrate dev --config prisma.config.ts",
+    "build": "prisma@7 generate --config prisma.config.ts",
+    "typecheck": "prisma@7 validate --config prisma.config.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "^7.10.0",
+    "@prisma/adapter-pg": "^7.10.0",
+    "pg": "^8.16.3"
+  },
+  "devDependencies": {
+    "prisma": "^7.10.0",
+    "dotenv": "^17.2.2",
+    "@types/pg": "^8.15.5"
+  }
+}
