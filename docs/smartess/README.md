@@ -65,14 +65,17 @@ it creates the default organization, site and gateway rows that telemetry
 references.
 
 Required variables (see `.env.example`): `SMARTESS_ENABLED`, `SMARTESS_USERNAME`,
-`SMARTESS_PASSWORD` (or `SMARTESS_PASSWORD_SHA1`), `SMARTESS_COMPANY_KEY`,
-`SMARTESS_DEVICE_PN`, `SMARTESS_DEVICE_SN`, `SMARTESS_DEVICE_DEVCODE`,
-`SMARTESS_DEVICE_DEVADDR`. PN/SN/devcode/devaddr are shown on the device page at
-www.dessmonitor.com; the company-key is in the login request of that web page.
+`SMARTESS_PASSWORD` (or `SMARTESS_PASSWORD_SHA1`), `SMARTESS_DEVICE_PN`,
+`SMARTESS_DEVICE_SN`. The SN is the PN followed by the device code (4 hex digits)
+and the device address (2 hex digits), so `devcode` and `devaddr` are derived from
+it. The company-key defaults to the public key the SmartESS web app uses.
 
-Assumptions to confirm against the real account on the first run: the auth action
-(`auth`; override with `SMARTESS_AUTH_ACTION=authSource` for installer accounts),
-that grid power is positive when importing, and the label names. The poller logs
-only error codes, never tokens, signed URLs or credentials.
+Data is read with `querySPDeviceLastData`, falling back to `queryDeviceLastData`
+and `webQueryDeviceEnergyFlowEs`; parameters from all of them are merged. Login
+tries `authSource` and then `auth`. Parameters are matched on their English label
+with the same rules the Solar project uses (for example, PV power is the largest
+of "PV Power" and "PV Charge Power"). Assumption to confirm on the first real run:
+grid power is positive when importing. The poller logs only error codes, never
+tokens, signed URLs or credentials.
 
 Never commit real values; keep them in the host's environment or secret store.
