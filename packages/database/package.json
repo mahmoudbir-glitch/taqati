@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "types": "./src/index.ts",
   "scripts": {
     "normalize": "node scripts/normalize-schema.mjs",
     "prisma:validate": "pnpm normalize && prisma validate --config prisma.config.ts",
@@ -21,6 +21,7 @@
   "devDependencies": {
     "prisma": "^7.10.0",
     "dotenv": "^17.2.2",
-    "@types/pg": "^8.15.5"
+    "@types/pg": "^8.15.5",
+    "typescript": "^5.9.3"
   }
 }
