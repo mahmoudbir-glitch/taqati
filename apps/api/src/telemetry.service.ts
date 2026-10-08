@@ -150,6 +150,62 @@ export class TelemetryService implements OnModuleInit, OnModuleDestroy {
 
     return rows.map((row) => ({ ...row, id: row.id.toString() }));
   }
+
+  /**
+   * Energy totals per local calendar day (site timezone), oldest first.
+   * Energy is the mean power of each hour that has readings, so it does not
+   * depend on how often the gateway reports.
+   */
+  async daily(siteId: string, days = 30): Promise<DailyEnergyRow[]> {
+    const span = Math.min(Math.max(days, 1), 90);
+    const site = await prisma.site.findUnique({ where: { id: siteId }, select: { timezone: true } });
+    const timezone = site?.timezone ?? "UTC";
+    const since = new Date(Date.now() - span * 24 * 3_600_000);
+
+    // `recordedAt` is stored in UTC. The current hour only counts for the part that has elapsed.
+    return prisma.$queryRaw<DailyEnergyRow[]>`
+      SELECT
+        to_char(h.hour, 'YYYY-MM-DD') AS "date",
+        SUM(h.solar * h.weight)::float8 AS "solarWh",
+        SUM(h.load * h.weight)::float8 AS "loadWh",
+        SUM(h.grid_import * h.weight)::float8 AS "gridImportWh",
+        SUM(h.grid_export * h.weight)::float8 AS "gridExportWh",
+        SUM(h.battery_charge * h.weight)::float8 AS "batteryChargeWh",
+        SUM(h.battery_discharge * h.weight)::float8 AS "batteryDischargeWh"
+      FROM (
+        SELECT
+          b.hour,
+          LEAST(1, GREATEST(0, EXTRACT(EPOCH FROM ((now() AT TIME ZONE ${timezone}) - b.hour)) / 3600.0)) AS weight,
+          b.solar, b.load, b.grid_import, b.grid_export, b.battery_charge, b.battery_discharge
+        FROM (
+          SELECT
+            date_trunc('hour', "recordedAt" AT TIME ZONE 'UTC' AT TIME ZONE ${timezone}) AS hour,
+            AVG(GREATEST(COALESCE("solarPowerW", 0), 0)) AS solar,
+            AVG(GREATEST(COALESCE("loadPowerW", 0), 0)) AS load,
+            AVG(GREATEST(COALESCE("gridPowerW", 0), 0)) AS grid_import,
+            AVG(GREATEST(-COALESCE("gridPowerW", 0), 0)) AS grid_export,
+            AVG(GREATEST(COALESCE("batteryPowerW", 0), 0)) AS battery_charge,
+            AVG(GREATEST(-COALESCE("batteryPowerW", 0), 0)) AS battery_discharge
+          FROM "TelemetryReading"
+          WHERE "siteId" = ${siteId} AND "recordedAt" >= ${since}
+          GROUP BY 1
+        ) b
+      ) h
+      GROUP BY 1
+      ORDER BY 1
+    `;
+  }
+}
+
+export interface DailyEnergyRow {
+  /** Local calendar day, YYYY-MM-DD. */
+  date: string;
+  solarWh: number;
+  loadWh: number;
+  gridImportWh: number;
+  gridExportWh: number;
+  batteryChargeWh: number;
+  batteryDischargeWh: number;
 }
 
 function numberOrNull(value: number | undefined) {

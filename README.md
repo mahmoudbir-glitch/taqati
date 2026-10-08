@@ -47,6 +47,16 @@ pnpm --filter @taqati/web dev
 
 - `GET /api/health`
 - `GET /api/sites/:siteId/telemetry/latest?limit=60`
+- `GET /api/sites/:siteId/telemetry/daily?days=30` — مجاميع الطاقة (Wh) لكل يوم بتوقيت الموقع
+
+## الواجهة
+
+صفحات `apps/web`: الرئيسية `/`، الطاقة `/energy`، البطارية `/battery`، التنبيهات `/alerts`، الأجهزة `/devices`، الإعدادات `/settings`.
+
+- عند ضبط `NEXT_PUBLIC_TAQATI_API_URL` و`NEXT_PUBLIC_TAQATI_SITE_ID` تعرض الواجهة قراءات حية من الـ API.
+- عند غيابهما تعرض نموذجاً تجريبياً يُولَّد داخل المتصفح (`apps/web/lib/demo.ts`) وتُوسَم الواجهة بـ«بيانات تجريبية».
+- التنبيهات وسجل الأحداث والمجاميع اليومية تُشتق من القراءات نفسها (`apps/web/lib/energy.ts`).
+- إعدادات الموقع (التعرفة، قدرة الألواح والإنفرتر، سعة البطارية، حد الاحتياط، المظهر) تُحفظ في المتصفح فقط.
 
 ## MQTT
 
