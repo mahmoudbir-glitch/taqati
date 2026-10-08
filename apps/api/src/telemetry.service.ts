@@ -96,7 +96,7 @@ export class TelemetryService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async persistTelemetry(siteId: string, gatewayId: string, data: TaqatiTelemetryMessage) {
+  async persistTelemetry(siteId: string, gatewayId: string, data: TaqatiTelemetryMessage) {
     const inverterId = data.meta?.inverterId;
     const recordedAt = new Date(data.timestamp);
     if (Number.isNaN(recordedAt.getTime())) return;

@@ -34,6 +34,10 @@ export interface TaqatiTelemetryMessage {
   meta?: {
     inverterId?: string;
     sequence?: number;
+    /** Where the reading came from, e.g. "gateway" or "smartess-cloud". */
+    source?: string;
+    /** Vendor values that have no first-class field yet (kept in raw data). */
+    extra?: Record<string, number>;
   };
 }
 
