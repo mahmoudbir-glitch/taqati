@@ -142,11 +142,13 @@ export class TelemetryService implements OnModuleInit, OnModuleDestroy {
   }
 
   async latest(siteId: string, limit = 60) {
-    return prisma.telemetryReading.findMany({
+    const rows = await prisma.telemetryReading.findMany({
       where: { siteId },
       orderBy: { recordedAt: "desc" },
       take: Math.min(Math.max(limit, 1), 300),
     });
+
+    return rows.map((row) => ({ ...row, id: row.id.toString() }));
   }
 }
 
