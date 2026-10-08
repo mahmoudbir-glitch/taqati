@@ -1,0 +1,28 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: taqati
+      POSTGRES_USER: taqati
+      POSTGRES_PASSWORD: taqati
+    ports:
+      - "5432:5432"
+    volumes:
+      - taqati_postgres_data:/var/lib/postgresql/data
+
+  mqtt:
+    image: emqx/emqx:5
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+      - "8083:8083"
+      - "18083:18083"
+    volumes:
+      - taqati_emqx_data:/opt/emqx/data
+      - taqati_emqx_log:/opt/emqx/log
+
+volumes:
+  taqati_postgres_data:
+  taqati_emqx_data:
+  taqati_emqx_log:
