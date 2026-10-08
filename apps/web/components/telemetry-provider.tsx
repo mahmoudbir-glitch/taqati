@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { apiConfig, fetchDaily, fetchReadings } from "../lib/api";
+import { apiConfig, fetchDaily, fetchReadings, fetchSeries } from "../lib/api";
 import { demoDaily, demoToday } from "../lib/demo";
 import { deriveAlerts, deriveEvents, integrate } from "../lib/energy";
 import { dayKey, startOfDay } from "../lib/format";
@@ -18,7 +18,6 @@ import type { DailyEnergy, DataMode, EnergyTotals, Reading, Settings, SystemAler
 
 const TICK_MS = 5000;
 const HISTORY_REFRESH_MS = 5 * 60_000;
-const HISTORY_LIMIT = 300; // the API maximum
 const DAILY_DAYS = 30;
 
 type TelemetryContextValue = {
@@ -58,7 +57,8 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
   const [now, setNow] = useState(0);
   const [settings, setSettings] = useState<Settings>(defaultSettings);
   const [acked, setAcked] = useState<AckState>({ day: "", ids: [] });
-  const [liveReadings, setLiveReadings] = useState<Reading[]>([]);
+  const [liveSeries, setLiveSeries] = useState<Reading[]>([]);
+  const [liveLatest, setLiveLatest] = useState<Reading | null>(null);
   const [liveDaily, setLiveDaily] = useState<DailyEnergy[] | null>(null);
   const [answered, setAnswered] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -81,9 +81,11 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
 
     const loadHistory = async () => {
       try {
-        const rows = await fetchReadings(HISTORY_LIMIT);
+        // Both must answer before the first render, so the page never flashes "no readings".
+        const [rows, [row]] = await Promise.all([fetchSeries(startOfDay(Date.now())), fetchReadings(1)]);
         if (cancelled) return;
-        setLiveReadings(rows);
+        setLiveSeries(rows);
+        if (row) setLiveLatest(row);
         setFailed(false);
       } catch {
         if (!cancelled) setFailed(true);
@@ -98,10 +100,7 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
         const [row] = await fetchReadings(1);
         if (cancelled) return;
         setFailed(false);
-        if (!row) return;
-        setLiveReadings((current) =>
-          current.some((reading) => reading.id === row.id) ? current : [...current, row].slice(-HISTORY_LIMIT),
-        );
+        if (row) setLiveLatest((current) => (current?.id === row.id ? current : row));
       } catch {
         if (!cancelled) setFailed(true);
       }
@@ -139,15 +138,18 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
   const today = useMemo(() => {
     if (now === 0) return [];
     if (!apiConfig.configured) return demoToday(now, settings);
-    return liveReadings.filter((reading) => reading.at >= dayStart);
-  }, [now, dayStart, settings, liveReadings]);
+    // Today's curve is the bucketed series, extended by the newest raw reading.
+    const series = liveSeries.filter((reading) => reading.at >= dayStart);
+    const last = series[series.length - 1];
+    return liveLatest && liveLatest.at >= dayStart && (!last || liveLatest.at > last.at) ? [...series, liveLatest] : series;
+  }, [now, dayStart, settings, liveSeries, liveLatest]);
 
   const daily = useMemo(() => {
     if (apiConfig.configured) return liveDaily;
     return dailySlot > 0 ? demoDaily(DAILY_DAYS, dailySlot * HISTORY_REFRESH_MS, settings) : null;
   }, [dailySlot, settings, liveDaily]);
 
-  const latest = apiConfig.configured ? (liveReadings[liveReadings.length - 1] ?? null) : (today[today.length - 1] ?? null);
+  const latest = apiConfig.configured ? liveLatest : (today[today.length - 1] ?? null);
 
   const todayTotals = useMemo(() => integrate(today), [today]);
   const alerts = useMemo(

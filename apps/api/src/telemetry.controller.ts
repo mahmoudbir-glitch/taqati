@@ -15,6 +15,15 @@ export class TelemetryController {
     return this.telemetry.latest(siteId, limit ?? 60);
   }
 
+  @Get("series")
+  series(
+    @Param("siteId") siteId: string,
+    @Query("since", new ParseIntPipe({ optional: true })) since?: number,
+    @Query("bucketMinutes", new ParseIntPipe({ optional: true })) bucketMinutes?: number,
+  ) {
+    return this.telemetry.series(siteId, since, bucketMinutes ?? 5);
+  }
+
   @Get("daily")
   daily(
     @Param("siteId") siteId: string,

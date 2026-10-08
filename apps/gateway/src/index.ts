@@ -1,3 +1,4 @@
+import "./env.js";
 import mqtt from "mqtt";
 import { MQTT_TOPICS, TaqatiTelemetryMessage } from "@taqati/shared";
 
@@ -6,26 +7,24 @@ const gatewayId = process.env.GATEWAY_ID ?? "development-gateway";
 const siteId = process.env.SITE_ID ?? "development-site";
 const mockTelemetry = process.env.MOCK_TELEMETRY !== "false";
 
+const statusTopic = MQTT_TOPICS.status(siteId, gatewayId);
+const statusPayload = (status: "ONLINE" | "OFFLINE") =>
+  JSON.stringify({ gatewayId, status, timestamp: new Date().toISOString() });
+
 const client = mqtt.connect(mqttUrl, {
-  username: process.env.MQTT_USERNAME,
-  password: process.env.MQTT_PASSWORD,
+  // An empty value in .env means "no credentials", not an empty username.
+  username: process.env.MQTT_USERNAME || undefined,
+  password: process.env.MQTT_PASSWORD || undefined,
   reconnectPeriod: 5000,
+  // Last Will: the broker reports OFFLINE for us if the connection drops.
+  will: { topic: statusTopic, payload: statusPayload("OFFLINE"), qos: 1, retain: true },
 });
 
 let sequence = 0;
 let telemetryTimer: NodeJS.Timeout | undefined;
 
 client.on("connect", () => {
-  const statusTopic = MQTT_TOPICS.status(siteId, gatewayId);
-  client.publish(
-    statusTopic,
-    JSON.stringify({
-      gatewayId,
-      status: "ONLINE",
-      timestamp: new Date().toISOString(),
-    }),
-    { qos: 1, retain: true },
-  );
+  client.publish(statusTopic, statusPayload("ONLINE"), { qos: 1, retain: true });
 
   console.log(`[gateway] connected to MQTT as ${gatewayId}`);
 
@@ -38,6 +37,7 @@ client.on("connect", () => {
 function publishMockTelemetry() {
   const solarPowerW = Math.round(4200 + Math.sin(Date.now() / 90000) * 600);
   const loadPowerW = Math.round(2100 + Math.sin(Date.now() / 70000) * 300);
+  // The mock site never touches the grid: the battery absorbs or covers the difference.
   const batteryPowerW = solarPowerW - loadPowerW;
   const message: TaqatiTelemetryMessage = {
     schemaVersion: 1,
@@ -46,7 +46,7 @@ function publishMockTelemetry() {
       status: "online",
       solarPowerW,
       loadPowerW,
-      gridPowerW: Math.max(0, loadPowerW - solarPowerW),
+      gridPowerW: 0,
       temperatureC: 39.5,
       gridVoltageV: 230,
       gridFrequencyHz: 50,
@@ -70,7 +70,10 @@ client.on("error", (error) => {
 
 function shutdown() {
   if (telemetryTimer) clearInterval(telemetryTimer);
-  client.end(false, {}, () => process.exit(0));
+  // A clean disconnect does not trigger the Last Will, so say OFFLINE explicitly.
+  client.publish(statusTopic, statusPayload("OFFLINE"), { qos: 1, retain: true }, () => {
+    client.end(false, {}, () => process.exit(0));
+  });
 }
 
 process.on("SIGTERM", shutdown);

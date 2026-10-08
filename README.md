@@ -21,7 +21,7 @@
 
 ## تشغيل التطوير
 
-1. انسخ `.env.example` إلى `.env`.
+1. انسخ `.env.example` إلى `.env` في جذر المستودع (كل الخدمات تقرأه من هناك).
 2. شغّل:
 
 ```bash
@@ -47,7 +47,14 @@ pnpm --filter @taqati/web dev
 
 - `GET /api/health`
 - `GET /api/sites/:siteId/telemetry/latest?limit=60`
+- `GET /api/sites/:siteId/telemetry/series?since=<epoch ms>&bucketMinutes=5` — متوسطات القراءات في فترات زمنية ثابتة (للمخططات)
 - `GET /api/sites/:siteId/telemetry/daily?days=30` — مجاميع الطاقة (Wh) لكل يوم بتوقيت الموقع
+
+قدرة وتيار البطارية في الاستجابات وفي قاعدة البيانات **بإشارة**: موجب = شحن، سالب = تفريغ. رسائل MQTT ترسل القيمة المطلقة مع `direction` والـ API يحوّلها عند التخزين.
+
+`WEB_ORIGIN` قائمة مفصولة بفواصل للمواقع المسموح لها بقراءة الـ API؛ بدونها يُسمح لأي موقع.
+
+`AUTO_PROVISION_GATEWAYS=true` (للتطوير فقط) ينشئ صفوف الموقع والبوابة تلقائياً لأي بوابة ترسل عبر MQTT. في الإنتاج اتركه غير مضبوط: قراءات البوابة غير المسجّلة تُرفض.
 
 ## الواجهة
 

@@ -57,6 +57,19 @@ export async function fetchReadings(limit: number): Promise<Reading[]> {
     .sort((a, b) => a.at - b.at);
 }
 
+/**
+ * Readings since `since` averaged into 5-minute buckets, oldest first. Unlike
+ * `fetchReadings`, the window does not shrink when the gateway reports often.
+ */
+export async function fetchSeries(since: number): Promise<Reading[]> {
+  const rows = await getJson(`/api/sites/${encodeURIComponent(siteId)}/telemetry/series?since=${Math.floor(since)}`);
+  if (!Array.isArray(rows)) throw new Error("unexpected series response");
+  return (rows as Array<ApiTelemetry & { at: number }>)
+    .map((row) => toReading({ ...row, id: `bucket-${row.at}`, recordedAt: new Date(Number(row.at)).toISOString() }))
+    .filter((reading): reading is Reading => reading !== null)
+    .sort((a, b) => a.at - b.at);
+}
+
 /** Daily energy totals for the configured site, oldest first. */
 export async function fetchDaily(days: number): Promise<DailyEnergy[]> {
   const rows = await getJson(`/api/sites/${encodeURIComponent(siteId)}/telemetry/daily?days=${days}`);

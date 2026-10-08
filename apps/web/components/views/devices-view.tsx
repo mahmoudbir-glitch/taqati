@@ -94,7 +94,6 @@ export function DevicesView() {
                 <dl className="kv">
                   <Row label="المعرّف"><Ltr>{latest.gatewayId ?? "—"}</Ltr></Row>
                   <Row label="آخر قراءة">{lastSeen}</Row>
-                  <Row label="قراءات اليوم"><Ltr>{today.length}</Ltr></Row>
                   <Row label="مصدر البيانات">{demo ? "نموذج تجريبي داخل المتصفح" : "خادم طاقتي"}</Row>
                 </dl>
               </DeviceCard>
