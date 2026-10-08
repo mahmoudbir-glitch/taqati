@@ -49,12 +49,30 @@ value in the app; it has to be derived from the sign or the energy balance.
 - The Wi-Fi Plug Pro uses the inverter's RS485 port. A second Modbus master
   (the Taqati Gateway) cannot share that bus with it; use another port or
   remove the dongle.
-- If Taqati reads from the SmartESS cloud instead, data granularity is 5 minutes,
-  not the 5 seconds used by the Gateway mock. No official public API has been
-  verified yet; confirm that before building a driver.
+- Cloud polling (implemented in `apps/api/src/smartess`) reads the SmartESS cloud
+  every 5 minutes, which is how often the collector reports. It is off unless
+  `SMARTESS_ENABLED=true`.
 - Modbus settings that match this device (see `InverterConnection` in the Prisma
   schema): `MODBUS_RTU`, `baudRate` 9600, `slaveId` to be confirmed.
 
-## Configuration
+## Cloud polling
 
-Optional variables are listed in `.env.example`. Never commit real values.
+The API logs in to `api.dessmonitor.com` with the documented SHA-1 signing scheme,
+calls `querySPDeviceLastData` and maps the parameters by their English label to
+`TaqatiTelemetryMessage` (`apps/api/src/smartess/smartess.mapper.ts`). Values
+without a first-class field are kept under `meta.extra` in the raw data. On start
+it creates the default organization, site and gateway rows that telemetry
+references.
+
+Required variables (see `.env.example`): `SMARTESS_ENABLED`, `SMARTESS_USERNAME`,
+`SMARTESS_PASSWORD` (or `SMARTESS_PASSWORD_SHA1`), `SMARTESS_COMPANY_KEY`,
+`SMARTESS_DEVICE_PN`, `SMARTESS_DEVICE_SN`, `SMARTESS_DEVICE_DEVCODE`,
+`SMARTESS_DEVICE_DEVADDR`. PN/SN/devcode/devaddr are shown on the device page at
+www.dessmonitor.com; the company-key is in the login request of that web page.
+
+Assumptions to confirm against the real account on the first run: the auth action
+(`auth`; override with `SMARTESS_AUTH_ACTION=authSource` for installer accounts),
+that grid power is positive when importing, and the label names. The poller logs
+only error codes, never tokens, signed URLs or credentials.
+
+Never commit real values; keep them in the host's environment or secret store.
