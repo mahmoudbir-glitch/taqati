@@ -14,4 +14,12 @@ export class TelemetryController {
   ) {
     return this.telemetry.latest(siteId, limit ?? 60);
   }
+
+  @Get("daily")
+  daily(
+    @Param("siteId") siteId: string,
+    @Query("days", new ParseIntPipe({ optional: true })) days?: number,
+  ) {
+    return this.telemetry.daily(siteId, days ?? 30);
+  }
 }

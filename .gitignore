@@ -19,3 +19,7 @@ coverage/
 
 # OS
 Thumbs.db
+
+# Build artifacts
+*.tsbuildinfo
+packages/database/src/generated/
